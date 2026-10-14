@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="ir_cron_ibt_ai_requests" model="ir.cron">
+        <field name="name">AI: Process custom provider requests</field>
+        <field name="model_id" ref="ai.model_ai_session"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_process_ibt_ai_requests()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>
+
