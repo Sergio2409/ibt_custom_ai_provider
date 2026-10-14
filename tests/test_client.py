@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 
@@ -30,6 +30,32 @@ class TestProviderClient(TransactionCase):
     def test_invalid_endpoint_port_is_reported_as_provider_error(self):
         with self.assertRaisesRegex(ProviderError, "invalid port"):
             validate_endpoint("https://ai.example.com:invalid/v1", resolve=False)
+
+    @patch("odoo.addons.ibt_custom_ai_provider.services.client.socket.getaddrinfo")
+    def test_non_global_endpoint_requires_opt_in(self, getaddrinfo):
+        getaddrinfo.return_value = [(2, 1, 6, "", ("100.64.0.1", 443))]
+        with self.assertRaises(ProviderError):
+            validate_endpoint("https://provider.example.com/v1")
+
+    @patch("odoo.addons.ibt_custom_ai_provider.services.client.requests.Session")
+    @patch("odoo.addons.ibt_custom_ai_provider.services.client.socket.getaddrinfo")
+    def test_request_connects_to_validated_address(self, getaddrinfo, Session):
+        getaddrinfo.return_value = [(2, 1, 6, "", ("93.184.216.34", 443))]
+        response = MagicMock(ok=True, is_redirect=False)
+        response.json.return_value = {"data": "ok"}
+        session = Session.return_value.__enter__.return_value
+        session.request.return_value = response
+        client = ProviderClient({
+            "transport": "openai",
+            "base_url": "https://provider.example.com/v1",
+        })
+
+        client._request("GET", "models")
+
+        request = session.request.call_args
+        self.assertEqual(request.args[:2], ("GET", "https://93.184.216.34/v1/models"))
+        self.assertEqual(request.kwargs["headers"]["Host"], "provider.example.com")
+        self.assertFalse(session.trust_env)
 
     @patch.object(ProviderClient, "_request")
     def test_ollama_model_discovery(self, request):

@@ -9,7 +9,6 @@
     "data": [
         "security/ir.access.csv",
         "data/ai_provider_data.xml",
-        "data/ollama_provider_data.xml",
         "data/ir_cron_data.xml",
         "views/ai_provider_views.xml",
         "views/res_config_settings_views.xml",

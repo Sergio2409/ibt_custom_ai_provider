@@ -3,7 +3,6 @@ import logging
 import uuid
 
 from odoo import api, fields, models
-from odoo.exceptions import AccessError
 
 from ..services.client import ProviderClient, ProviderError
 
@@ -66,10 +65,12 @@ class AiSession(models.Model):
 
     @api.model
     def _cron_process_ibt_ai_requests(self):
-        sessions = self.sudo().search([
+        domain = [
             ("loop_state", "=", "waiting_model"),
             ("ibt_ai_provider_id", "!=", False),
-        ], order="write_date, id", limit=BATCH_SIZE)
+        ]
+        sessions = self.sudo().search(domain, order="write_date, id", limit=BATCH_SIZE)
+        self.env["ir.cron"]._commit_progress(remaining=self.sudo().search_count(domain))
         for session in sessions:
             self.env.cr.execute(
                 "SELECT pg_try_advisory_xact_lock(hashtext(%s), %s)",
@@ -80,7 +81,24 @@ class AiSession(models.Model):
             session.invalidate_recordset()
             if session.loop_state != "waiting_model" or not session.ibt_ai_provider_id:
                 continue
-            session._process_ibt_ai_request()
+            try:
+                with self.env.cr.savepoint():
+                    session._process_ibt_ai_request()
+            except Exception:
+                _logger.exception("Unexpected failure while processing queued AI session %s", session.id)
+                try:
+                    with self.env.cr.savepoint():
+                        session._deliver_ibt_ai_result(
+                            {"kind": "failure", "code": "provider_request_failed"},
+                            "The queued AI request failed unexpectedly.",
+                        )
+                except Exception:
+                    # Do not let one corrupt session roll back and starve the
+                    # rest of the bounded cron batch.
+                    _logger.exception("Unable to deliver failure for queued AI session %s", session.id)
+                    session.write({"loop_state": "ready", "ibt_ai_provider_id": False})
+            if not self.env["ir.cron"]._commit_progress(1):
+                break
 
     def _process_ibt_ai_request(self):
         self.ensure_one()
@@ -112,14 +130,25 @@ class AiSession(models.Model):
     def _deliver_ibt_ai_result(self, completion_result, error_message=None):
         self.ensure_one()
         context = dict(self.request_context or {})
+        base_user_env = api.Environment(self.env.cr, self.request_user_id.id, {})
+        accessible_companies = set(base_user_env.user.company_ids.ids)
+        company_access_changed = False
+        for key in ("allowed_company_ids", "active_company_ids"):
+            requested_ids = context.get(key, ())
+            if any(company_id not in accessible_companies for company_id in requested_ids):
+                company_access_changed = True
+                context[key] = [company_id for company_id in requested_ids if company_id in accessible_companies]
+                if not context[key]:
+                    context[key] = [base_user_env.company.id]
+        if company_access_changed:
+            completion_result = {"kind": "failure", "code": "company_access_changed"}
+            error_message = base_user_env._(
+                "Your company access changed while this AI response was running. Please try again."
+            )
         if self.request_guest_id:
             context["guest"] = self.env["mail.guest"].browse(self.request_guest_id.id)
         context["discuss_channel"] = self.channel_id
         user_env = api.Environment(self.env.cr, self.request_user_id.id, context)
-        accessible_companies = set(user_env.user.company_ids.ids)
-        for key in ("allowed_company_ids", "active_company_ids"):
-            if any(company_id not in accessible_companies for company_id in context.get(key, ())):
-                raise AccessError(user_env._("Your company access changed while this AI response was running."))
         session = self.with_env(user_env).sudo()
         callback_type = session.state["callback_type"]
         if callback_type == "agent_loop":
@@ -127,6 +156,10 @@ class AiSession(models.Model):
                 if completion_result.get("code") == "provider_configuration_changed":
                     user_message = error_message or self.env._(
                         "The AI provider configuration changed while this request was queued. Please try again."
+                    )
+                elif completion_result.get("code") == "company_access_changed":
+                    user_message = error_message or self.env._(
+                        "Your company access changed while this AI response was running. Please try again."
                     )
                 else:
                     # Detailed provider exceptions can contain internal hostnames,

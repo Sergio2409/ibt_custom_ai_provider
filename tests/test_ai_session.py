@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from odoo.tests.common import TransactionCase
+from odoo.tests.common import TransactionCase, new_test_user
 
 
 class TestIbtAiSession(TransactionCase):
@@ -57,3 +57,25 @@ class TestIbtAiSession(TransactionCase):
         self.assertNotIn("internal.example", user_message)
         self.assertNotIn("11434", user_message)
         self.assertIn("temporarily unavailable", user_message)
+
+    def test_changed_company_access_finishes_request_without_raising(self):
+        request_user = new_test_user(
+            self.env,
+            login="restricted_ai_user",
+            groups="base.group_user",
+            company_id=self.env.company.id,
+            company_ids=[(6, 0, self.env.company.ids)],
+        )
+        other_company = self.env["res.company"].create({"name": "Former company"})
+        session = self._make_session("waiting_model")
+        session.write({
+            "request_user_id": request_user.id,
+            "request_context": {"allowed_company_ids": [other_company.id]},
+        })
+        completion = {"kind": "success", "message": {"role": "assistant", "content": []}}
+
+        with patch.object(type(session), "_finish_exchange") as finish_exchange:
+            session._deliver_ibt_ai_result(completion)
+
+        finish_exchange.assert_called_once()
+        self.assertIn("company access changed", finish_exchange.call_args.kwargs["content"])

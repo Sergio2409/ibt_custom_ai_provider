@@ -5,6 +5,7 @@ import socket
 from urllib.parse import urljoin, urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from odoo.exceptions import UserError
 from odoo.tools.translate import LazyTranslate
@@ -19,7 +20,7 @@ class ProviderError(UserError):
     pass
 
 
-def validate_endpoint(url, allow_private=False, resolve=True):
+def _resolve_endpoint(url, allow_private=False, resolve=True):
     parsed = urlparse((url or "").strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ProviderError(_("The provider URL must be a valid HTTP or HTTPS URL."))
@@ -32,7 +33,7 @@ def validate_endpoint(url, allow_private=False, resolve=True):
     except ValueError as error:
         raise ProviderError(_("The provider URL contains an invalid port.")) from error
     if not resolve:
-        return parsed
+        return parsed, ()
     try:
         addresses = {
             entry[4][0]
@@ -46,9 +47,38 @@ def validate_endpoint(url, allow_private=False, resolve=True):
     for address in addresses:
         ip = ipaddress.ip_address(address)
         blocked = ip.is_link_local or ip.is_multicast or ip.is_unspecified
-        if blocked or (not allow_private and (ip.is_private or ip.is_loopback or ip.is_reserved)):
+        if blocked or (not allow_private and not ip.is_global):
             raise ProviderError(_("The provider URL resolves to a network address that is not allowed."))
+    return parsed, tuple(sorted(addresses))
+
+
+def validate_endpoint(url, allow_private=False, resolve=True):
+    parsed, _addresses = _resolve_endpoint(url, allow_private, resolve)
     return parsed
+
+
+class _PinnedHTTPSAdapter(HTTPAdapter):
+    """Connect to a validated IP while verifying TLS for the configured host."""
+
+    def __init__(self, hostname, *args, **kwargs):
+        self.hostname = hostname
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs.update(assert_hostname=self.hostname, server_hostname=self.hostname)
+        return super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+
+
+def _pinned_url(parsed, address):
+    host = f"[{address}]" if ":" in address else address
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return parsed._replace(netloc=host).geturl()
+
+
+def _host_header(parsed):
+    default_port = 443 if parsed.scheme == "https" else 80
+    return f"{parsed.hostname}:{parsed.port}" if parsed.port and parsed.port != default_port else parsed.hostname
 
 
 def _json_error(response):
@@ -67,27 +97,41 @@ class ProviderClient:
         self.config = config
 
     def _request(self, method, path, payload=None):
-        validate_endpoint(self.config["base_url"], self.config.get("allow_private_network", False))
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        url = urljoin(self.config["base_url"].rstrip("/") + "/", path.lstrip("/"))
+        parsed, addresses = _resolve_endpoint(url, self.config.get("allow_private_network", False))
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Host": _host_header(parsed),
+        }
         key = self.config.get("api_key")
         if self.config["transport"] == "anthropic":
             headers.update({"anthropic-version": "2023-06-01", "x-api-key": key})
         elif key:
             headers["Authorization"] = f"Bearer {key}"
-        url = urljoin(self.config["base_url"].rstrip("/") + "/", path.lstrip("/"))
         _logger.info("AI provider request: %s %s", method, url)
-        try:
-            response = requests.request(
-                method,
-                url,
-                headers=headers,
-                json=payload,
-                timeout=(10, self.config.get("timeout", 120)),
-                verify=self.config.get("verify_ssl", True),
-                allow_redirects=False,
-            )
-        except requests.RequestException as error:
-            raise ProviderError(_("The AI provider could not be reached: %s", str(error))) from error
+        response = None
+        last_error = None
+        for address in addresses:
+            try:
+                with requests.Session() as session:
+                    session.trust_env = False
+                    if parsed.scheme == "https":
+                        session.mount("https://", _PinnedHTTPSAdapter(parsed.hostname))
+                    response = session.request(
+                        method,
+                        _pinned_url(parsed, address),
+                        headers=headers,
+                        json=payload,
+                        timeout=(10, self.config.get("timeout", 120)),
+                        verify=self.config.get("verify_ssl", True),
+                        allow_redirects=False,
+                    )
+                break
+            except requests.RequestException as error:
+                last_error = error
+        if response is None:
+            raise ProviderError(_("The AI provider could not be reached: %s", str(last_error))) from last_error
         if response.is_redirect:
             raise ProviderError(_("The AI provider attempted an HTTP redirect, which is blocked for security."))
         if not response.ok:
@@ -148,10 +192,10 @@ class ProviderClient:
             return self._anthropic_completion(messages, instructions, tools, options)
         return self._openai_completion(messages, instructions, tools, options)
 
-    def embeddings(self, inputs):
+    def embeddings(self, inputs, model=None):
         if self.config["transport"] == "anthropic":
             raise ProviderError(_("Anthropic does not provide an embeddings API. Configure another provider for embeddings."))
-        model = self.config.get("embedding_model")
+        model = model or self.config.get("embedding_model")
         if not model:
             raise ProviderError(_("No embedding model is configured for this company."))
         texts = [f"{item['title']}\n\n{item.get('content', '')}" if item.get("title") else item.get("content", "") for item in inputs]

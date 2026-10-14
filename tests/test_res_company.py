@@ -1,4 +1,5 @@
 from odoo import Command
+from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase
 
 
@@ -44,3 +45,50 @@ class TestIbtAiCompanyConfig(TransactionCase):
 
         self.assertEqual(config["id"], self.provider.id)
         self.assertEqual(config["embedding_model"], self.embedding_model.name)
+
+    def test_chat_field_rejects_embedding_model(self):
+        with self.assertRaisesRegex(ValidationError, "must be a chat model"):
+            with self.env.cr.savepoint():
+                self.company.ibt_ai_chat_model_id = self.embedding_model
+
+    def test_embedding_field_rejects_chat_model(self):
+        with self.assertRaisesRegex(ValidationError, "must be an embedding model"):
+            with self.env.cr.savepoint():
+                self.company.ibt_ai_embedding_model_id = self.chat_model
+
+    def test_anthropic_provider_cannot_supply_embeddings(self):
+        provider = self.env["ibt.ai.provider"].create({
+            "name": "Anthropic",
+            "base_url": "https://api.anthropic.com/v1",
+            "transport": "anthropic",
+            "model_ids": [Command.create({
+                "name": "invalid-anthropic-embedding",
+                "model_type": "embedding",
+            })],
+        })
+        with self.assertRaisesRegex(ValidationError, "cannot be used for embeddings"):
+            with self.env.cr.savepoint():
+                self.company.write({
+                    "ibt_ai_embedding_provider_id": provider.id,
+                    "ibt_ai_embedding_model_id": provider.model_ids.id,
+                })
+
+    def test_ollama_requires_openai_transport(self):
+        with self.assertRaisesRegex(ValidationError, "OpenAI-compatible transport"):
+            with self.env.cr.savepoint():
+                self.env["ibt.ai.provider"].create({
+                    "name": "Invalid Ollama",
+                    "base_url": "https://ollama.example.com/v1",
+                    "provider_kind": "ollama",
+                    "transport": "anthropic",
+                })
+
+    def test_selected_provider_cannot_be_archived(self):
+        with self.assertRaisesRegex(ValidationError, "cannot be archived"):
+            with self.env.cr.savepoint():
+                self.provider.active = False
+
+    def test_selected_model_cannot_be_archived(self):
+        with self.assertRaisesRegex(ValidationError, "cannot be archived"):
+            with self.env.cr.savepoint():
+                self.chat_model.active = False

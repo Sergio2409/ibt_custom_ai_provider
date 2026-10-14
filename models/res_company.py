@@ -1,4 +1,4 @@
-from odoo import api, fields, models, _
+from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
 
@@ -14,6 +14,8 @@ class ResCompany(models.Model):
 
     def _ibt_ai_config(self, boost_reasoning=False):
         self.ensure_one()
+        # Provider credentials are administrator-only, but every AI user must
+        # be able to consume the company-selected configuration.
         provider = self.ibt_ai_provider_id.sudo()
         if not self.ibt_ai_enabled or not provider:
             return None
@@ -26,6 +28,8 @@ class ResCompany(models.Model):
 
     def _ibt_ai_embedding_config(self):
         self.ensure_one()
+        # See _ibt_ai_config: callers need a bounded snapshot, not access to
+        # the provider record itself.
         provider = (self.ibt_ai_embedding_provider_id or self.ibt_ai_provider_id).sudo()
         if not self.ibt_ai_enabled or not provider or not self.ibt_ai_embedding_model_id:
             return None
@@ -38,11 +42,29 @@ class ResCompany(models.Model):
     def _check_ibt_ai_models(self):
         for company in self:
             if company.ibt_ai_enabled and (not company.ibt_ai_provider_id or not company.ibt_ai_chat_model_id):
-                raise ValidationError(_("Select a provider and chat model before enabling the custom AI provider."))
+                raise ValidationError(self.env._("Select a provider and chat model before enabling the custom AI provider."))
+            if company.ibt_ai_enabled and not company.ibt_ai_provider_id.active:
+                raise ValidationError(self.env._("The selected chat provider must be active."))
             if company.ibt_ai_chat_model_id and company.ibt_ai_chat_model_id.provider_id != company.ibt_ai_provider_id:
-                raise ValidationError(_("The chat model must belong to the selected chat provider."))
+                raise ValidationError(self.env._("The chat model must belong to the selected chat provider."))
+            if company.ibt_ai_chat_model_id and company.ibt_ai_chat_model_id.model_type != "chat":
+                raise ValidationError(self.env._("The selected chat model must be a chat model."))
+            if company.ibt_ai_enabled and company.ibt_ai_chat_model_id and not company.ibt_ai_chat_model_id.active:
+                raise ValidationError(self.env._("The selected chat model must be active."))
             if company.ibt_ai_reasoning_model_id and company.ibt_ai_reasoning_model_id.provider_id != company.ibt_ai_provider_id:
-                raise ValidationError(_("The reasoning model must belong to the selected chat provider."))
+                raise ValidationError(self.env._("The reasoning model must belong to the selected chat provider."))
+            if company.ibt_ai_reasoning_model_id and company.ibt_ai_reasoning_model_id.model_type != "chat":
+                raise ValidationError(self.env._("The selected reasoning model must be a chat model."))
+            if company.ibt_ai_reasoning_model_id and not company.ibt_ai_reasoning_model_id.active:
+                raise ValidationError(self.env._("The selected reasoning model must be active."))
             embedding_provider = company.ibt_ai_embedding_provider_id or company.ibt_ai_provider_id
+            if company.ibt_ai_embedding_model_id and company.ibt_ai_embedding_model_id.model_type != "embedding":
+                raise ValidationError(self.env._("The selected embedding model must be an embedding model."))
             if company.ibt_ai_embedding_model_id and company.ibt_ai_embedding_model_id.provider_id != embedding_provider:
-                raise ValidationError(_("The embedding model must belong to the selected embedding provider."))
+                raise ValidationError(self.env._("The embedding model must belong to the selected embedding provider."))
+            if company.ibt_ai_embedding_model_id and not company.ibt_ai_embedding_model_id.active:
+                raise ValidationError(self.env._("The selected embedding model must be active."))
+            if company.ibt_ai_embedding_model_id and not embedding_provider.active:
+                raise ValidationError(self.env._("The selected embedding provider must be active."))
+            if company.ibt_ai_embedding_model_id and embedding_provider.transport == "anthropic":
+                raise ValidationError(self.env._("Anthropic providers cannot be used for embeddings."))

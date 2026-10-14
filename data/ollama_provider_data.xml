@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<odoo>
-    <record id="provider_ollama" model="ibt.ai.provider">
-        <field name="provider_kind">ollama</field>
-    </record>
-</odoo>

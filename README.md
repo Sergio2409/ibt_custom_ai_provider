@@ -20,7 +20,9 @@ For an Ollama provider, use **Discover Models** to import the models currently
 installed on that Ollama server. Discovery reads `/api/tags` and `/api/show`,
 updates capability metadata, and never deletes manually configured models.
 Embedding-only models are imported only when Ollama reports the 1536 dimensions
-required by Odoo.
+required by Odoo. Embedding model IDs must be unique across providers because
+Odoo stores the model identifier with each embedding and uses it to route
+future regeneration requests.
 
 API keys are readable only by Settings administrators, are never returned by
 the connection-test action, and are omitted from logs. Restrict provider
