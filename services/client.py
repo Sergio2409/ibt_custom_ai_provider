@@ -27,11 +27,21 @@ def validate_endpoint(url, allow_private=False, resolve=True):
         raise ProviderError(_("The provider URL cannot contain credentials, a query string, or a fragment."))
     if parsed.scheme == "http" and not allow_private:
         raise ProviderError(_("Public provider endpoints must use HTTPS."))
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ProviderError(_("The provider URL contains an invalid port.")) from error
     if not resolve:
         return parsed
     try:
-        addresses = {entry[4][0] for entry in socket.getaddrinfo(parsed.hostname, parsed.port or 443)}
-    except socket.gaierror as error:
+        addresses = {
+            entry[4][0]
+            for entry in socket.getaddrinfo(
+                parsed.hostname,
+                port or (443 if parsed.scheme == "https" else 80),
+            )
+        }
+    except (OSError, UnicodeError) as error:
         raise ProviderError(_("The provider hostname cannot be resolved.")) from error
     for address in addresses:
         ip = ipaddress.ip_address(address)

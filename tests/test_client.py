@@ -27,6 +27,10 @@ class TestProviderClient(TransactionCase):
         with self.assertRaises(ProviderError):
             validate_endpoint("http://ollama.local:11434/v1", allow_private=False)
 
+    def test_invalid_endpoint_port_is_reported_as_provider_error(self):
+        with self.assertRaisesRegex(ProviderError, "invalid port"):
+            validate_endpoint("https://ai.example.com:invalid/v1", resolve=False)
+
     @patch.object(ProviderClient, "_request")
     def test_ollama_model_discovery(self, request):
         request.side_effect = [

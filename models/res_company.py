@@ -17,7 +17,11 @@ class ResCompany(models.Model):
         provider = self.ibt_ai_provider_id.sudo()
         if not self.ibt_ai_enabled or not provider:
             return None
-        chat_model = self.ibt_ai_reasoning_model_id if boost_reasoning and self.ibt_ai_reasoning_model_id else self.ibt_ai_chat_model_id
+        chat_model = (
+            self.ibt_ai_reasoning_model_id
+            if boost_reasoning and self.ibt_ai_reasoning_model_id
+            else self.ibt_ai_chat_model_id
+        ).sudo()
         return provider._snapshot(chat_model=chat_model)
 
     def _ibt_ai_embedding_config(self):
@@ -25,7 +29,7 @@ class ResCompany(models.Model):
         provider = (self.ibt_ai_embedding_provider_id or self.ibt_ai_provider_id).sudo()
         if not self.ibt_ai_enabled or not provider or not self.ibt_ai_embedding_model_id:
             return None
-        return provider._snapshot(embedding_model=self.ibt_ai_embedding_model_id)
+        return provider._snapshot(embedding_model=self.ibt_ai_embedding_model_id.sudo())
 
     @api.constrains(
         "ibt_ai_enabled", "ibt_ai_provider_id", "ibt_ai_chat_model_id",
