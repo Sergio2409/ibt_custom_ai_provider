@@ -16,6 +16,12 @@ class ResCompany(models.Model):
         "ibt.ai.provider", string="Speech Gateway", ondelete="restrict",
         domain="[('provider_kind', '=', 'speech_gateway')]",
     )
+    ibt_speech_realtime = fields.Boolean(
+        string="Realtime Dictation",
+        help="Live transcription in the transcription widget through the speech gateway "
+             "(needs the gateway's realtime route and this Odoo's address in its "
+             "REALTIME_ALLOWED_ORIGINS). Off: the widget keeps using Odoo's IAP.",
+    )
     ibt_speech_correction = fields.Selection(
         [
             ("off", "Off"),
@@ -60,7 +66,7 @@ class ResCompany(models.Model):
         provider = self.ibt_speech_provider_id.sudo()
         if not self.ibt_speech_enabled or not provider:
             return None
-        return dict(provider._snapshot(), correction=self.ibt_speech_correction)
+        return dict(provider._snapshot(), correction=self.ibt_speech_correction, realtime=self.ibt_speech_realtime)
 
     @api.constrains("ibt_speech_enabled", "ibt_speech_provider_id")
     def _check_ibt_speech_settings(self):

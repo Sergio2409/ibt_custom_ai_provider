@@ -34,6 +34,7 @@ class ResConfigSettings(models.TransientModel):
     ibt_speech_enabled = fields.Boolean(related="company_id.ibt_speech_enabled", readonly=False)
     ibt_speech_provider_id = fields.Many2one(related="company_id.ibt_speech_provider_id", readonly=False)
     ibt_speech_correction = fields.Selection(related="company_id.ibt_speech_correction", readonly=False)
+    ibt_speech_realtime = fields.Boolean(related="company_id.ibt_speech_realtime", readonly=False)
 
     @api.onchange("ibt_ai_provider_id")
     def _onchange_ibt_ai_provider_id(self):

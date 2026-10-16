@@ -1,4 +1,5 @@
 import base64
+import json
 from unittest.mock import MagicMock, patch
 
 from odoo import Command
@@ -6,6 +7,8 @@ from odoo.exceptions import AccessError, ValidationError
 from odoo.tests import tagged
 from odoo.tests.common import HttpCase, JsonRpcException, TransactionCase, new_test_user
 from odoo.tools import mute_logger
+
+from odoo.addons.web.tests.test_js import HootCommon, unit_test_error_checker
 
 from ..services import speech
 from ..services.client import ProviderClient, ProviderError
@@ -325,3 +328,91 @@ class TestSpeechCallArtifact(SpeechSetupMixin, TransactionCase):
         artifact, lease_until = self._pending_artifact()
         self.assertEqual(artifact._transcribe_claimed_record(lease_until), {"status": "ok", "transcript": "WEBVTT\n"})
         request.assert_not_called()
+
+
+@tagged("post_install", "-at_install")
+class TestRealtimeSession(SpeechSetupMixin, HttpCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._create_speech_setup()
+        cls.company.ibt_speech_realtime = True
+        new_test_user(cls.env, login="ibt-realtime-http", password="ibt-realtime-http-pw",
+                      groups="base.group_user", company_id=cls.company.id)
+
+    def setUp(self):
+        super().setUp()
+        self.authenticate("ibt-realtime-http", "ibt-realtime-http-pw")
+
+    def request_session(self, language="es", prompt="Notas"):
+        return self.make_jsonrpc_request("/ai/transcription/session", {"language": language, "prompt": prompt})
+
+    @staticmethod
+    def decode(session_token):
+        prefix, _, encoded = session_token.partition(".")
+        return prefix, json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+
+    @patch(REQUEST)
+    def test_session_token_points_the_browser_to_the_gateway(self, request):
+        request.return_value = {"client_secret": {"value": "ek_secret", "expires_at": 1}}
+        result = self.request_session(language="es_ES", prompt="x" * 3000)
+
+        self.assertEqual(result["status"], "success")
+        self.assertIsNone(result["iap_transaction_token"])
+        prefix, payload = self.decode(result["session_token"])
+        self.assertEqual(prefix, "ibt")
+        self.assertEqual(payload, {"url": "wss://speech.example.com/v1/realtime", "secret": "ek_secret"})
+        method, path, body = request.call_args.args
+        self.assertEqual((method, path), ("POST", "realtime/transcription_sessions"))
+        transcription = body["input_audio_transcription"]
+        self.assertEqual((transcription["model"], transcription["language"]), ("whisper-1", "es"))
+        self.assertEqual(len(transcription["prompt"]), 2000)
+
+    @patch(REQUEST)
+    def test_unsupported_language_falls_back_to_auto_detection(self, request):
+        request.side_effect = [gateway_error(400, "language_not_enabled"),
+                               {"client_secret": {"value": "ek_auto", "expires_at": 1}}]
+        with mute_logger("odoo.addons.ibt_custom_ai_provider.services.speech"):
+            result = self.request_session(language="fr")
+        self.assertEqual(self.decode(result["session_token"])[1]["secret"], "ek_auto")
+        self.assertNotIn("language", request.call_args.args[2]["input_audio_transcription"])
+
+    @patch("odoo.addons.ai.controllers.ai.call_odoo_ai")
+    @patch(REQUEST)
+    def test_realtime_off_keeps_odoo_iap(self, request, call_odoo_ai):
+        self.company.ibt_speech_realtime = False
+        call_odoo_ai.return_value = {"session_token": "openai-token", "iap_transaction_token": "iap"}
+        self.assertEqual(self.request_session(), {"status": "success", "session_token": "openai-token",
+                                          "iap_transaction_token": "iap"})
+        request.assert_not_called()
+
+    @mute_logger("odoo.http", "odoo.addons.ibt_custom_ai_provider.controllers.ai")
+    @patch(REQUEST)
+    def test_gateway_errors_become_user_errors(self, request):
+        for error in (gateway_error(403, "route_not_allowed"), gateway_error(502)):
+            with self.subTest(status=error.status_code):
+                request.side_effect = error
+                with self.assertRaises(JsonRpcException) as ctx:
+                    self.request_session()
+                self.assertEqual(ctx.exception.args[0], "odoo.exceptions.UserError")
+
+    def test_realtime_url(self):
+        for base_url, expected in [("https://speech.example.com/v1", "wss://speech.example.com/v1/realtime"),
+                                   ("http://192.168.10.25:8080/v1/", "ws://192.168.10.25:8080/v1/realtime")]:
+            with self.subTest(base_url=base_url):
+                self.assertEqual(speech.realtime_url({"base_url": base_url}), expected)
+
+
+@tagged("post_install", "-at_install")
+class TestRealtimeClientPatch(HttpCase):
+    """Runs static/tests (hoot) of this module in headless Chrome."""
+
+    def test_hoot(self):
+        new_test_user(self.env, login="ibt_hoot", password="ibt_hoot", groups="base.group_user")
+        module_id = HootCommon._generate_hash(self, "@ibt_custom_ai_provider")
+        self.browser_js(
+            f"/web/tests?headless&loglevel=2&preset=desktop&timeout=15000&id={module_id}", "", "",
+            login="ibt_hoot", timeout=600, success_signal="[HOOT] Test suite succeeded",
+            error_checker=unit_test_error_checker,
+        )

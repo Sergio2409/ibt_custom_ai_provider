@@ -40,3 +40,20 @@ class IbtSpeechAIController(AIController):
             )
             raise UserError(speech.user_message(request.env, error)) from error
         return {"status": "success", "text": result["text"]}
+
+    @http.route()
+    def get_session_token(self, language: str, prompt: str):
+        """Realtime dictation: a single-use secret from the speech gateway instead of IAP."""
+        config = request.env.company._ibt_speech_config()
+        if not config or not config["realtime"]:
+            return super().get_session_token(language, prompt)
+        try:
+            session_token = speech.realtime_session(config, language=language, prompt=prompt)
+        except ProviderError as error:
+            _logger.warning(
+                "Speech gateway realtime session failed: HTTP %s, %s",
+                error.status_code or "-", error.error_code or "no response",
+            )
+            raise UserError(speech.user_message(request.env, error)) from error
+        # No IAP transaction: the widget then skips its usage report to IAP.
+        return {"status": "success", "session_token": session_token, "iap_transaction_token": None}

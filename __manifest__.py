@@ -13,6 +13,14 @@
         "views/ai_provider_views.xml",
         "views/res_config_settings_views.xml",
     ],
+    "assets": {
+        "web.assets_backend": [
+            "ibt_custom_ai_provider/static/src/**/*",
+        ],
+        "web.assets_unit_tests": [
+            "ibt_custom_ai_provider/static/tests/**/*",
+        ],
+    },
     "installable": True,
     "application": False,
 }

@@ -9,8 +9,11 @@ validation (DNS pinning, no redirects, private-network opt-in) applies.
 Never logs audio, transcripts or keys.
 """
 
+import base64
+import json
 import logging
 import re
+from urllib.parse import urlparse
 
 from .client import ProviderClient, ProviderError
 
@@ -97,6 +100,43 @@ def transcribe(config, audio, mimetype, language=None, response_format="json"):
         len(audio), language or "auto", response_format, correction, result["correction_status"],
     )
     return result
+
+
+def realtime_url(config):
+    """WebSocket URL of the gateway: https://host/v1 -> wss://host/v1/realtime."""
+    parsed = urlparse(config["base_url"].rstrip("/"))
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    return parsed._replace(scheme=scheme, path=f"{parsed.path}/realtime").geturl()
+
+
+def realtime_session(config, language=None, prompt=None):
+    """Ask the gateway for a single-use realtime secret for a browser.
+
+    :return: the session token Odoo's RealtimeClient receives: "ibt." plus the
+        base64url JSON {"url": <gateway WebSocket URL>, "secret": <secret>};
+        the JS patch (realtime_client_patch.js) connects there.
+    :raises ProviderError: like transcribe()
+    """
+    language = stt_language(language)
+    transcription = {"model": "whisper-1", "prompt": (prompt or "")[:2000]}
+    client = ProviderClient(config)
+
+    def request(transcription):
+        return client._request("POST", "realtime/transcription_sessions",
+                               {"input_audio_transcription": transcription})
+
+    try:
+        body = request(dict(transcription, language=language) if language else transcription)
+    except ProviderError as error:
+        if not (language and error.status_code == 400 and error.error_code in LANGUAGE_ERRORS):
+            raise
+        _logger.info("Speech gateway does not accept language %s for realtime; using auto-detection", language)
+        body = request(transcription)
+    secret = (body.get("client_secret") or {}).get("value")
+    if not secret:
+        raise ProviderError("The speech gateway returned no realtime secret")
+    payload = json.dumps({"url": realtime_url(config), "secret": secret}).encode()
+    return "ibt." + base64.urlsafe_b64encode(payload).decode().rstrip("=")
 
 
 def user_message(env, error):
