@@ -30,3 +30,6 @@ administration to trusted users. This module deliberately blocks loopback,
 link-local and private destinations unless the provider explicitly allows
 private-network access; cloud endpoints should keep that option disabled.
 
+See [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for the prioritized work
+and release gates that remain before treating the module as production ready.
+

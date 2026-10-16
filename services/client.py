@@ -17,7 +17,10 @@ MAX_ERROR_LENGTH = 800
 
 
 class ProviderError(UserError):
-    pass
+    # Set when the provider answered with an HTTP error: its status and, for
+    # OpenAI-style bodies, the error code (e.g. "language_not_enabled").
+    status_code = None
+    error_code = None
 
 
 def _resolve_endpoint(url, allow_private=False, resolve=True):
@@ -81,6 +84,14 @@ def _host_header(parsed):
     return f"{parsed.hostname}:{parsed.port}" if parsed.port and parsed.port != default_port else parsed.hostname
 
 
+def _json_error_code(response):
+    try:
+        error = response.json().get("error")
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return error.get("code") if isinstance(error, dict) else None
+
+
 def _json_error(response):
     try:
         body = response.json()
@@ -96,14 +107,16 @@ class ProviderClient:
     def __init__(self, config):
         self.config = config
 
-    def _request(self, method, path, payload=None):
+    def _request(self, method, path, payload=None, files=None, data=None):
+        """JSON request, or multipart/form-data when `files` is given."""
         url = urljoin(self.config["base_url"].rstrip("/") + "/", path.lstrip("/"))
         parsed, addresses = _resolve_endpoint(url, self.config.get("allow_private_network", False))
         headers = {
             "Accept": "application/json",
-            "Content-Type": "application/json",
             "Host": _host_header(parsed),
         }
+        if files is None:
+            headers["Content-Type"] = "application/json"
         key = self.config.get("api_key")
         if self.config["transport"] == "anthropic":
             headers.update({"anthropic-version": "2023-06-01", "x-api-key": key})
@@ -122,7 +135,9 @@ class ProviderClient:
                         method,
                         _pinned_url(parsed, address),
                         headers=headers,
-                        json=payload,
+                        json=payload if files is None else None,
+                        files=files,
+                        data=data,
                         timeout=(10, self.config.get("timeout", 120)),
                         verify=self.config.get("verify_ssl", True),
                         allow_redirects=False,
@@ -136,7 +151,10 @@ class ProviderClient:
             raise ProviderError(_("The AI provider attempted an HTTP redirect, which is blocked for security."))
         if not response.ok:
             detail = (_json_error(response) or response.reason)[:MAX_ERROR_LENGTH]
-            raise ProviderError(_("AI provider error %(status)s: %(detail)s", status=response.status_code, detail=detail))
+            error = ProviderError(_("AI provider error %(status)s: %(detail)s", status=response.status_code, detail=detail))
+            error.status_code = response.status_code
+            error.error_code = _json_error_code(response)
+            raise error
         try:
             return response.json()
         except ValueError as error:

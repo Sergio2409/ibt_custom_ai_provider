@@ -31,18 +31,22 @@
                             <field name="transport"/>
                             <field name="provider_kind"/>
                             <field name="base_url" placeholder="https://api.example.com/v1"/>
+                            <div colspan="2" class="text-muted" invisible="provider_kind != 'speech_gateway'">
+                                Base URL of the gateway, e.g. https://speech.example.com/v1, and an API key created with
+                                <code>ibt-admin keys add odoo</code> on the gateway.
+                            </div>
                             <field name="api_key" password="True"/>
                         </group>
                         <group>
                             <field name="allow_private_network"/>
                             <field name="verify_ssl"/>
                             <field name="timeout"/>
-                            <field name="send_embedding_dimensions"/>
+                            <field name="send_embedding_dimensions" invisible="provider_kind == 'speech_gateway'"/>
                             <field name="active" invisible="1"/>
                         </group>
                     </group>
                     <notebook>
-                        <page string="Models">
+                        <page string="Models" name="models" invisible="provider_kind == 'speech_gateway'">
                             <field name="model_ids" context="{'default_provider_id': id}">
                                 <list editable="bottom">
                                     <field name="sequence" widget="handle"/>
@@ -57,7 +61,7 @@
                                 </list>
                             </field>
                         </page>
-                        <page string="Notes"><field name="note"/></page>
+                        <page string="Notes" name="notes"><field name="note"/></page>
                     </notebook>
                 </sheet>
             </form>

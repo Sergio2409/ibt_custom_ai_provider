@@ -18,6 +18,13 @@
                             <div class="mt16"><button name="%(action_ibt_ai_provider)d" type="action" string="Manage providers and models" class="btn-link" icon="oi-arrow-right"/></div>
                         </div>
                     </setting>
+                    <setting string="Speech-to-text" help="Transcribe AI chat voice messages and call recordings with your IBT Speech Gateway instead of Odoo's IAP service.">
+                        <field name="ibt_speech_enabled"/>
+                        <div class="content-group" invisible="not ibt_speech_enabled">
+                            <div class="row mt16"><label for="ibt_speech_provider_id" class="col-lg-4 o_light_label"/><field name="ibt_speech_provider_id" required="ibt_speech_enabled" options="{'no_quick_create': True}"/></div>
+                            <div class="row mt16"><label for="ibt_speech_correction" class="col-lg-4 o_light_label"/><field name="ibt_speech_correction"/></div>
+                        </div>
+                    </setting>
                 </block>
             </xpath>
         </field>

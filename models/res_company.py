@@ -11,6 +11,23 @@ class ResCompany(models.Model):
     ibt_ai_reasoning_model_id = fields.Many2one("ibt.ai.provider.model", string="Reasoning Model", ondelete="restrict")
     ibt_ai_embedding_provider_id = fields.Many2one("ibt.ai.provider", string="Embedding Provider", ondelete="restrict")
     ibt_ai_embedding_model_id = fields.Many2one("ibt.ai.provider.model", string="Embedding Model", ondelete="restrict")
+    ibt_speech_enabled = fields.Boolean(string="Use IBT Speech Gateway")
+    ibt_speech_provider_id = fields.Many2one(
+        "ibt.ai.provider", string="Speech Gateway", ondelete="restrict",
+        domain="[('provider_kind', '=', 'speech_gateway')]",
+    )
+    ibt_speech_correction = fields.Selection(
+        [
+            ("off", "Off"),
+            ("format", "Punctuation, capitals and accents"),
+            ("glossary", "Punctuation, capitals, accents and glossary"),
+        ],
+        string="Transcript Correction",
+        default="off",
+        required=True,
+        help="Optional correction of transcripts by the gateway's local language model. "
+             "The gateway always keeps the raw transcript; it must have correction configured.",
+    )
 
     def _ibt_ai_config(self, boost_reasoning=False):
         self.ensure_one()
@@ -35,6 +52,27 @@ class ResCompany(models.Model):
             return None
         return provider._snapshot(embedding_model=self.ibt_ai_embedding_model_id.sudo())
 
+    def _ibt_speech_config(self):
+        """Snapshot of the speech gateway for transcription, or None when disabled."""
+        self.ensure_one()
+        # Like _ibt_ai_config: every user may transcribe, only administrators
+        # may read the provider and its key.
+        provider = self.ibt_speech_provider_id.sudo()
+        if not self.ibt_speech_enabled or not provider:
+            return None
+        return dict(provider._snapshot(), correction=self.ibt_speech_correction)
+
+    @api.constrains("ibt_speech_enabled", "ibt_speech_provider_id")
+    def _check_ibt_speech_settings(self):
+        for company in self:
+            provider = company.ibt_speech_provider_id
+            if provider and provider.provider_kind != "speech_gateway":
+                raise ValidationError(self.env._("The speech gateway must be a provider of kind IBT Speech Gateway."))
+            if company.ibt_speech_enabled and not provider:
+                raise ValidationError(self.env._("Select a speech gateway before enabling it."))
+            if company.ibt_speech_enabled and not provider.active:
+                raise ValidationError(self.env._("The selected speech gateway must be active."))
+
     @api.constrains(
         "ibt_ai_enabled", "ibt_ai_provider_id", "ibt_ai_chat_model_id",
         "ibt_ai_reasoning_model_id", "ibt_ai_embedding_provider_id", "ibt_ai_embedding_model_id",
@@ -45,6 +83,8 @@ class ResCompany(models.Model):
                 raise ValidationError(self.env._("Select a provider and chat model before enabling the custom AI provider."))
             if company.ibt_ai_enabled and not company.ibt_ai_provider_id.active:
                 raise ValidationError(self.env._("The selected chat provider must be active."))
+            if "speech_gateway" in (company.ibt_ai_provider_id | company.ibt_ai_embedding_provider_id).mapped("provider_kind"):
+                raise ValidationError(self.env._("A speech gateway cannot be used for chat or embeddings."))
             if company.ibt_ai_chat_model_id and company.ibt_ai_chat_model_id.provider_id != company.ibt_ai_provider_id:
                 raise ValidationError(self.env._("The chat model must belong to the selected chat provider."))
             if company.ibt_ai_chat_model_id and company.ibt_ai_chat_model_id.model_type != "chat":

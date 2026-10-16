@@ -5,7 +5,11 @@ class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
 
     ibt_ai_enabled = fields.Boolean(related="company_id.ibt_ai_enabled", readonly=False)
-    ibt_ai_provider_id = fields.Many2one(related="company_id.ibt_ai_provider_id", readonly=False)
+    ibt_ai_provider_id = fields.Many2one(
+        related="company_id.ibt_ai_provider_id",
+        readonly=False,
+        domain="[('provider_kind', '!=', 'speech_gateway')]",
+    )
     ibt_ai_chat_model_id = fields.Many2one(
         related="company_id.ibt_ai_chat_model_id",
         readonly=False,
@@ -16,12 +20,20 @@ class ResConfigSettings(models.TransientModel):
         readonly=False,
         domain="[('provider_id', '=', ibt_ai_provider_id), ('model_type', '=', 'chat')]",
     )
-    ibt_ai_embedding_provider_id = fields.Many2one(related="company_id.ibt_ai_embedding_provider_id", readonly=False)
+    ibt_ai_embedding_provider_id = fields.Many2one(
+        related="company_id.ibt_ai_embedding_provider_id",
+        readonly=False,
+        domain="[('provider_kind', '!=', 'speech_gateway')]",
+    )
     ibt_ai_embedding_model_id = fields.Many2one(
         related="company_id.ibt_ai_embedding_model_id",
         readonly=False,
         domain="[('provider_id', '=', ibt_ai_embedding_provider_id), ('model_type', '=', 'embedding')]",
     )
+
+    ibt_speech_enabled = fields.Boolean(related="company_id.ibt_speech_enabled", readonly=False)
+    ibt_speech_provider_id = fields.Many2one(related="company_id.ibt_speech_provider_id", readonly=False)
+    ibt_speech_correction = fields.Selection(related="company_id.ibt_speech_correction", readonly=False)
 
     @api.onchange("ibt_ai_provider_id")
     def _onchange_ibt_ai_provider_id(self):

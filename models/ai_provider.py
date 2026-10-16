@@ -18,10 +18,12 @@ class IbtAiProvider(models.Model):
         default="openai",
     )
     provider_kind = fields.Selection(
-        [("generic", "Generic"), ("ollama", "Ollama")],
+        [("generic", "Generic"), ("ollama", "Ollama"), ("speech_gateway", "IBT Speech Gateway")],
         required=True,
         default="generic",
-        help="Select Ollama to enable discovery of locally installed models.",
+        help="Select Ollama to enable discovery of locally installed models. "
+             "Select IBT Speech Gateway for speech-to-text (ibt_ai_speech_gateway); "
+             "such a provider is used only for transcription.",
     )
     base_url = fields.Char(required=True)
     api_key = fields.Char(groups="base.group_system", copy=False)
@@ -45,6 +47,20 @@ class IbtAiProvider(models.Model):
                 raise ValidationError(self.env._("Timeout must be between 1 and 1800 seconds."))
             if provider.provider_kind == "ollama" and provider.transport != "openai":
                 raise ValidationError(self.env._("Ollama providers must use the OpenAI-compatible transport."))
+            if provider.provider_kind == "speech_gateway" and provider.transport != "openai":
+                raise ValidationError(self.env._("Speech gateway providers must use the OpenAI-compatible transport."))
+            Company = self.env["res.company"].sudo()
+            if provider.provider_kind == "speech_gateway" and Company.search_count([
+                "|", ("ibt_ai_provider_id", "=", provider.id), ("ibt_ai_embedding_provider_id", "=", provider.id),
+            ], limit=1):
+                raise ValidationError(self.env._("A speech gateway cannot be used for chat or embeddings."))
+            speech_domain = fields.Domain("ibt_speech_enabled", "=", True) & fields.Domain("ibt_speech_provider_id", "=", provider.id)
+            if provider.provider_kind != "speech_gateway" and Company.search_count(
+                fields.Domain("ibt_speech_provider_id", "=", provider.id), limit=1,
+            ):
+                raise ValidationError(self.env._("A provider selected as speech gateway must stay of kind IBT Speech Gateway."))
+            if not provider.active and Company.search_count(speech_domain, limit=1):
+                raise ValidationError(self.env._("A speech gateway selected by a company cannot be archived."))
             if provider.transport == "anthropic" and self.env["res.company"].sudo().search_count([
                 ("ibt_ai_embedding_provider_id", "=", provider.id),
                 ("ibt_ai_embedding_model_id", "!=", False),
