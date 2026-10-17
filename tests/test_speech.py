@@ -14,6 +14,7 @@ from odoo.addons.web.tests.test_js import HootCommon, unit_test_error_checker
 
 from ..services import speech
 from ..services.client import ProviderClient, ProviderError
+from .test_ai_provider_secret import MASTER_KEY, master_keys
 
 REQUEST = "odoo.addons.ibt_custom_ai_provider.services.client.ProviderClient._request"
 AUDIO = b"ID3 fake mp3 audio"
@@ -141,6 +142,7 @@ class SpeechSetupMixin:
 
     @classmethod
     def _create_speech_setup(cls):
+        cls.enterClassContext(master_keys(MASTER_KEY))
         cls.speech_provider = cls.env["ibt.ai.provider"].create({
             "name": "Speech gateway",
             "provider_kind": "speech_gateway",

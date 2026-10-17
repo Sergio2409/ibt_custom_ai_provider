@@ -24,9 +24,52 @@ required by Odoo. Embedding model IDs must be unique across providers because
 Odoo stores the model identifier with each embedding and uses it to route
 future regeneration requests.
 
-API keys are readable only by Settings administrators, are never returned by
-the connection-test action, and are omitted from logs. Restrict provider
-administration to trusted users. This module deliberately blocks loopback,
+## Provider API keys
+
+API keys are stored encrypted with a master key that is kept outside the
+database, so a database backup alone does not expose them. The key field is
+write-only: once saved, a key is never displayed, read, exported or copied
+again, even by administrators; the form only shows that a key is stored.
+Keys never appear in logs or error messages, and neutralized database copies
+(staging, tests) have their keys removed.
+
+**Master key.** Generate one with the Odoo server's Python and keep it with
+the server configuration, not with database backups:
+
+    python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+Put it in the Odoo configuration file (Odoo logs at startup that the option
+is unknown to it; the value is not logged), or set it as the
+`IBT_AI_SECRET_KEYS` environment variable, for example from a Docker secret:
+
+    [options]
+    ibt_ai_secret_keys = <master key>
+
+Restart Odoo after changing it. Providers without a key (Ollama) work without
+a master key; storing or using a key requires it. Upgrading from a version
+before 20.0.1.2.0 encrypts the stored keys and stops with an error, leaving
+everything unchanged, when no master key is configured.
+
+**Replace or revoke a provider key.** Open the provider, type the new key and
+save: the stored key is replaced, the provider and its models stay. *Remove
+it* deletes the stored key. Revoke the old key at the provider (for the speech
+gateway, `ibt-admin keys rotate <name>` issues the new key and stops the old
+one; `ibt-admin keys revoke <name>` only stops it).
+
+**Rotate the master key.** Put a new master key first and keep the old one
+after it (`ibt_ai_secret_keys = <new>,<old>`), restart, re-encrypt, then
+remove the old key and restart again:
+
+    odoo-bin shell -c <config> -d <database>
+    >>> env["ibt.ai.provider"]._ibt_rotate_api_keys()
+    >>> env.cr.commit()
+
+**Lost master key.** Stored keys cannot be recovered: configure a new master
+key and type every provider key again.
+
+## Network access
+
+Restrict provider administration to trusted users. This module deliberately blocks loopback,
 link-local and private destinations unless the provider explicitly allows
 private-network access; cloud endpoints should keep that option disabled.
 

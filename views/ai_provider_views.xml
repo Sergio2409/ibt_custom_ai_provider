@@ -37,7 +37,13 @@
                                 Base URL of the gateway, e.g. https://speech.example.com/v1, and an API key created with
                                 <code>ibt-admin keys add odoo</code> on the gateway.
                             </div>
-                            <field name="api_key" password="True"/>
+                            <field name="api_key" password="True" placeholder="Type a key to store it (it is never shown again)"/>
+                            <field name="api_key_set" invisible="1"/>
+                            <div colspan="2" class="text-muted" invisible="not api_key_set">
+                                A key is stored encrypted. Type a new key to replace it, or
+                                <button name="action_remove_api_key" type="object" string="remove it" class="btn-link p-0 align-baseline"
+                                        confirm="Remove the stored API key? Requests to this provider will be sent without a key."/>.
+                            </div>
                         </group>
                         <group>
                             <field name="allow_private_network"/>

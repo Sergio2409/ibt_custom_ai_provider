@@ -1,8 +1,13 @@
+import logging
+
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
+from odoo.tools import SQL, sql
 
-from ..services import speech
+from ..services import secret, speech
 from ..services.client import ProviderClient, ProviderError, validate_endpoint
+
+_logger = logging.getLogger(__name__)
 
 DEFAULT_VOICES = {"es": "ef_dora", "other": "af_heart"}
 
@@ -29,7 +34,14 @@ class IbtAiProvider(models.Model):
              "such a provider is used only for transcription.",
     )
     base_url = fields.Char(required=True)
-    api_key = fields.Char(groups="base.group_system", copy=False)
+    # Write-only: the key is encrypted into the api_key_secret column, which
+    # is not a field (see init()), so no read, export or copy can return it.
+    api_key = fields.Char(
+        compute="_compute_api_key", inverse="_inverse_api_key", groups="base.group_system", copy=False,
+        help="Type a key to store it encrypted; a new key replaces the stored one. "
+             "The key is never displayed again.",
+    )
+    api_key_set = fields.Boolean(string="API Key Stored", compute="_compute_api_key_set")
     allow_private_network = fields.Boolean(
         groups="base.group_system",
         help="Allow RFC1918 and loopback endpoints. Enable only for trusted local services such as Ollama.",
@@ -43,6 +55,84 @@ class IbtAiProvider(models.Model):
     model_ids = fields.One2many("ibt.ai.provider.model", "provider_id", context={"active_test": False})
     voice_ids = fields.One2many("ibt.ai.provider.voice", "provider_id", context={"active_test": False})
     note = fields.Text()
+
+    def init(self):
+        super().init()
+        self.env.cr.execute(SQL(
+            "ALTER TABLE %s ADD COLUMN IF NOT EXISTS api_key_secret varchar", SQL.identifier(self._table),
+        ))
+
+    def _compute_api_key(self):
+        self.api_key = False
+
+    def _inverse_api_key(self):
+        for provider in self:
+            provider._ibt_store_api_key(provider.api_key)
+
+    def _compute_api_key_set(self):
+        self.env.cr.execute(SQL(
+            "SELECT id FROM %s WHERE id IN %s AND api_key_secret IS NOT NULL",
+            SQL.identifier(self._table), tuple(self._origin.ids) or (None,),
+        ))
+        stored = {row[0] for row in self.env.cr.fetchall()}
+        for provider in self:
+            provider.api_key_set = provider._origin.id in stored
+
+    def _ibt_store_api_key(self, key):
+        self.ensure_one()
+        self.env.cr.execute(SQL(
+            "UPDATE %s SET api_key_secret = %s WHERE id = %s",
+            SQL.identifier(self._table), secret.encrypt(key) if key else None, self.id,
+        ))
+        # Also drop the typed key from the cache, so that the saved record
+        # read back by the form does not return it.
+        self.invalidate_recordset(["api_key", "api_key_set"])
+        _logger.info("API key %s for AI provider %s (#%s) by %s",
+                     "stored" if key else "removed", self.name, self.id, self.env.user.login)
+
+    def _ibt_api_key(self):
+        self.ensure_one()
+        self.env.cr.execute(SQL(
+            "SELECT api_key_secret FROM %s WHERE id = %s", SQL.identifier(self._table), self.id,
+        ))
+        token = (self.env.cr.fetchone() or [None])[0]
+        return secret.decrypt(token) if token else ""
+
+    def action_remove_api_key(self):
+        for provider in self:
+            provider._ibt_store_api_key(False)
+
+    @api.model
+    def _ibt_rotate_api_keys(self):
+        """Re-encrypt every stored key with the first master key (see README)."""
+        self.env.cr.execute(SQL(
+            "SELECT id, api_key_secret FROM %s WHERE api_key_secret IS NOT NULL", SQL.identifier(self._table),
+        ))
+        rows = self.env.cr.fetchall()
+        for provider_id, token in rows:
+            self.env.cr.execute(SQL(
+                "UPDATE %s SET api_key_secret = %s WHERE id = %s",
+                SQL.identifier(self._table), secret.rotate(token), provider_id,
+            ))
+        _logger.info("Re-encrypted %s AI provider API keys with the current master key", len(rows))
+        return len(rows)
+
+    @api.model
+    def _ibt_encrypt_plain_api_keys(self):
+        """Move keys stored in clear by versions before 20.0.1.2.0 into api_key_secret."""
+        if not sql.column_exists(self.env.cr, self._table, "api_key"):
+            return
+        self.env.cr.execute(SQL(
+            "SELECT id, api_key FROM %s WHERE api_key IS NOT NULL AND api_key != ''", SQL.identifier(self._table),
+        ))
+        # Fails (and so stops the upgrade) when no master key is configured:
+        # keys are never left in clear silently.
+        for provider_id, key in self.env.cr.fetchall():
+            self.env.cr.execute(SQL(
+                "UPDATE %s SET api_key_secret = %s WHERE id = %s",
+                SQL.identifier(self._table), secret.encrypt(key), provider_id,
+            ))
+        self.env.cr.execute(SQL("ALTER TABLE %s DROP COLUMN api_key", SQL.identifier(self._table)))
 
     @api.constrains("active", "base_url", "allow_private_network", "timeout", "provider_kind", "transport")
     def _check_connection_settings(self):
@@ -91,7 +181,7 @@ class IbtAiProvider(models.Model):
             "transport": self.transport,
             "provider_kind": self.provider_kind,
             "base_url": self.base_url.rstrip("/"),
-            "api_key": self.api_key or "",
+            "api_key": self._ibt_api_key(),
             "allow_private_network": self.allow_private_network,
             "verify_ssl": self.verify_ssl,
             "timeout": self.timeout,

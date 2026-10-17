@@ -9,6 +9,10 @@ operational decision and compensating controls.
 
 ### 1. Protect provider credentials at rest
 
+Done in 20.0.1.2.0: keys are encrypted with a master key kept outside the
+database (`ibt_ai_secret_keys`), write-only, removed from neutralized copies,
+and replaceable or rotatable without recreating providers; see the README.
+
 - Replace directly stored API keys with an encrypted secret field or a reference
   to an external secret supplied at runtime.
 - Keep secrets out of ORM exports, chatter, audit messages, logs, exceptions and
@@ -150,7 +154,8 @@ is retained, and how it is removed.
 - Preflight embedding-model uniqueness before installing the partial unique
   index and provide an actionable remediation message for conflicting data.
 - Add a configuration export/import format that excludes credentials.
-- Document backup, restore, rollback and provider-key rotation procedures.
+- Document backup, restore and rollback procedures (provider-key rotation is
+  in the README).
 
 Acceptance: upgrades fail safely with actionable diagnostics and never expose or
 silently discard configuration.
