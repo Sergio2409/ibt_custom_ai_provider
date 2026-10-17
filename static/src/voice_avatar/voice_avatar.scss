@@ -1,0 +1,35 @@
+// The messages stay mounted (voice mode reads new answers aloud), just hidden.
+.o-mail-Thread:has(> .o-ibt-VoiceAvatar) > :not(.o-ibt-VoiceAvatar) {
+    display: none !important;
+}
+
+.o-ibt-VoiceAvatar-face {
+    width: 9rem;
+    height: 9rem;
+    transform: scale(calc(1 + var(--ibt-level, 0) * 0.25));
+    transition: transform 0.08s linear;
+
+    &.o-listening,
+    &.o-speaking {
+        animation: o-ibt-voice-ring 1.2s ease-out infinite;
+    }
+
+    &.o-thinking {
+        animation: o-ibt-voice-breathe 1.6s ease-in-out infinite;
+    }
+}
+
+@keyframes o-ibt-voice-ring {
+    from {
+        box-shadow: 0 0 0 0 rgba($primary, 0.45);
+    }
+    to {
+        box-shadow: 0 0 0 1.5rem rgba($primary, 0);
+    }
+}
+
+@keyframes o-ibt-voice-breathe {
+    50% {
+        opacity: 0.6;
+    }
+}

@@ -31,7 +31,7 @@ async function setupAiChat() {
     const [commentSubtypeId] = pyEnv["mail.message.subtype"].search([
         ["subtype_xmlid", "=", "mail.mt_comment"],
     ]);
-    pyEnv["mail.message"].create([
+    const [, answerId] = pyEnv["mail.message"].create([
         {
             author_id: serverState.partnerId,
             body: "¿Cuántas facturas vencidas tengo?",
@@ -55,7 +55,7 @@ async function setupAiChat() {
         return { parts: 2, part: params.part, mimetype: "audio/mpeg", audio: btoa("fake mp3") };
     });
     patchWithCleanup(window, { Audio: FakeAudio });
-    return { channelId };
+    return { channelId, answerId };
 }
 
 test("the speaker button reads an agent answer aloud, part by part", async () => {
@@ -106,6 +106,7 @@ test("voice mode not allowed by the company: no switch, no automatic reading", a
     await click("button[title='More Actions']");
     await contains("button[name='toggle-web-search']");
     await contains("button[name='ibt-voice-mode']", { count: 0 });
+    await contains("button[name='ibt-voice-avatar']", { count: 0 });
     const voiceReply = getService("ibt_voice_reply");
     voiceReply.expectReply(channelId, 0);
     voiceReply.onMessageShown({ id: 5, channel_id: { id: channelId }, aiIsAgentResponse: true });
@@ -129,4 +130,40 @@ test("each user can switch voice mode off in the AI chat", async () => {
     voiceReply.expectReply(channelId, 0);
     voiceReply.onMessageShown({ id: 5, channel_id: { id: channelId }, aiIsAgentResponse: true });
     expect.verifySteps([]);
+});
+
+test("voice avatar replaces the chat and shows when the answer is spoken", async () => {
+    patchWithCleanup(session, { ibt_voice_replies: true, ibt_voice_mode: true });
+    const { channelId, answerId } = await setupAiChat();
+    // The answer keeps playing until it is stopped.
+    patchWithCleanup(window, {
+        Audio: class extends FakeAudio {
+            play() {
+                expect.step("play");
+                return Promise.resolve();
+            }
+        },
+    });
+    onRpc("res.users.settings", "set_res_users_settings", ({ kwargs }) => {
+        expect.step(`saved ${JSON.stringify(kwargs.new_settings)}`);
+    });
+    await start();
+    await openDiscuss(channelId);
+    await click("button[title='More Actions']");
+    await click("button[name='ibt-voice-avatar']");
+    await expect.waitForSteps(['saved {"ibt_voice_avatar":true}']);
+    await contains(".o-ibt-VoiceAvatar-face.o-idle");
+    await contains(".o-mail-Message.o-ai-agent-response:not(:visible)");
+
+    getService("ibt_voice_reply").speak({ id: answerId });
+    // Part 1 is prefetched while part 0 plays (see the first test).
+    await expect.waitForSteps(["speech part 0", "play", "speech part 1"]);
+    await contains(".o-ibt-VoiceAvatar-face.o-speaking");
+    await click(".o-ibt-VoiceAvatar button:contains(Stop)");
+    await contains(".o-ibt-VoiceAvatar-face.o-idle");
+
+    await click(".o-ibt-VoiceAvatar-showChat");
+    await expect.waitForSteps(['saved {"ibt_voice_avatar":false}']);
+    await contains(".o-ibt-VoiceAvatar", { count: 0 });
+    await contains(".o-mail-Message.o-ai-agent-response");
 });

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="ibt_custom_ai_provider.VoiceAvatar">
+        <t t-set="status" t-value="this.status()"/>
+        <div class="o-ibt-VoiceAvatar d-flex flex-column flex-grow-1 align-items-center justify-content-center gap-3 py-4">
+            <div class="o-ibt-VoiceAvatar-face rounded-circle" t-att-class="'o-' + status" t-attf-style="--ibt-level: {{ this.level(status) }}">
+                <img class="w-100 h-100 rounded-circle object-fit-cover" t-att-src="this.props.channel.avatarUrl" alt=""/>
+            </div>
+            <div class="text-muted" t-out="this.labels[status]"/>
+            <div class="d-flex gap-2">
+                <button t-if="status === 'speaking'" class="btn btn-secondary" t-on-click="() => this.voiceReply.stop()">
+                    <i class="oi me-1" data-icon="stop"/>Stop
+                </button>
+                <button class="btn btn-link o-ibt-VoiceAvatar-showChat" t-on-click="() => this.voiceReply.setUserSetting('ibt_voice_avatar', false)">
+                    <i class="oi me-1" data-icon="chat_bubble"/>Show chat
+                </button>
+            </div>
+        </div>
+    </t>
+
+    <t t-inherit="mail.Thread" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('o-mail-Thread')]" position="inside">
+            <VoiceAvatar t-if="this.channel?.isAiChat and this.env.services.ibt_voice_reply.isAvatarOn()" channel="this.channel"/>
+        </xpath>
+    </t>
+
+</templates>
