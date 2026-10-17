@@ -1,7 +1,10 @@
 import ipaddress
 import json
 import logging
+import math
+import random
 import socket
+import time
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -14,6 +17,12 @@ _logger = logging.getLogger(__name__)
 _ = LazyTranslate(__name__, default_lang="en_US")
 EMBEDDING_DIMENSIONS = 1536
 MAX_ERROR_LENGTH = 800
+MAX_BODY_BYTES = 32 * 1024 * 1024
+MAX_RETRIES = 2
+RETRY_STATUSES = {429, 502, 503, 504}
+# The provider refused these without working on them: resending a completion
+# cannot produce a second answer.
+REJECTED_STATUSES = {429, 503}
 
 
 class ProviderError(UserError):
@@ -21,6 +30,9 @@ class ProviderError(UserError):
     # OpenAI-style bodies, the error code (e.g. "language_not_enabled").
     status_code = None
     error_code = None
+    retry_after = None
+    # Connection refused, reset or unreachable (not a read timeout).
+    retryable = False
 
 
 def _resolve_endpoint(url, allow_private=False, resolve=True):
@@ -84,6 +96,24 @@ def _host_header(parsed):
     return f"{parsed.hostname}:{parsed.port}" if parsed.port and parsed.port != default_port else parsed.hostname
 
 
+def _read_body(response, deadline):
+    """Load the streamed body into the response, bounded in size and time."""
+    length = response.headers.get("Content-Length") or ""
+    if length.isdigit() and int(length) > MAX_BODY_BYTES:
+        raise ProviderError(_("The AI provider response is too large."))
+    body = bytearray()
+    try:
+        for chunk in response.iter_content(64 * 1024):
+            body += chunk
+            if len(body) > MAX_BODY_BYTES:
+                raise ProviderError(_("The AI provider response is too large."))
+            if time.monotonic() > deadline:
+                raise ProviderError(_("The AI provider did not answer in time."))
+    except requests.RequestException as error:
+        raise ProviderError(_("The AI provider connection failed during the answer: %s", str(error))) from error
+    response._content = bytes(body)
+
+
 def _json_error_code(response):
     try:
         error = response.json().get("error")
@@ -110,11 +140,32 @@ class ProviderClient:
     def __init__(self, config):
         self.config = config
 
-    def _request(self, method, path, payload=None, files=None, data=None, raw=False):
+    def _request(self, method, path, payload=None, files=None, data=None, raw=False, idempotent=True):
         """JSON request, or multipart/form-data when `files` is given.
 
         raw=True returns the response body as bytes (e.g. generated audio).
+        Transient failures are retried within one deadline: the provider
+        timeout, or the caller's config["deadline"] (time.monotonic()) if
+        sooner. idempotent=False (completions) is not resent once the
+        provider may be working on it (read timeout, 502, 504).
         """
+        deadline = min(self.config.get("deadline", math.inf), time.monotonic() + self.config.get("timeout", 120))
+        statuses = RETRY_STATUSES if idempotent else REJECTED_STATUSES
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                return self._send(method, path, payload, files, data, raw, deadline)
+            except ProviderError as error:
+                try:
+                    wait = float(error.retry_after)
+                except (TypeError, ValueError):
+                    wait = 2 ** attempt + random.random()
+                if (attempt == MAX_RETRIES or not (error.retryable or error.status_code in statuses)
+                        or time.monotonic() + wait >= deadline):
+                    raise
+                _logger.info("AI provider request failed (%s); retrying in %.1f s", error.status_code or "connection", wait)
+                time.sleep(wait)
+
+    def _send(self, method, path, payload, files, data, raw, deadline):
         url = urljoin(self.config["base_url"].rstrip("/") + "/", path.lstrip("/"))
         parsed, addresses = _resolve_endpoint(url, self.config.get("allow_private_network", False))
         headers = {
@@ -131,12 +182,15 @@ class ProviderClient:
         _logger.info("AI provider request: %s %s", method, url)
         response = None
         last_error = None
-        for address in addresses:
-            try:
-                with requests.Session() as session:
-                    session.trust_env = False
-                    if parsed.scheme == "https":
-                        session.mount("https://", _PinnedHTTPSAdapter(parsed.hostname))
+        with requests.Session() as session:
+            session.trust_env = False
+            if parsed.scheme == "https":
+                session.mount("https://", _PinnedHTTPSAdapter(parsed.hostname))
+            for address in addresses:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
                     response = session.request(
                         method,
                         _pinned_url(parsed, address),
@@ -144,15 +198,21 @@ class ProviderClient:
                         json=payload if files is None else None,
                         files=files,
                         data=data,
-                        timeout=(10, self.config.get("timeout", 120)),
+                        timeout=(min(10, remaining), remaining),
                         verify=self.config.get("verify_ssl", True),
                         allow_redirects=False,
+                        stream=True,
                     )
-                break
-            except requests.RequestException as error:
-                last_error = error
-        if response is None:
-            raise ProviderError(_("The AI provider could not be reached: %s", str(last_error))) from last_error
+                    break
+                except requests.RequestException as error:
+                    last_error = error
+            if response is None:
+                error = ProviderError(_("The AI provider could not be reached: %s", str(last_error or "timeout")))
+                # A read timeout means the provider may be working on it.
+                error.retryable = isinstance(last_error, requests.ConnectionError)
+                raise error from last_error
+            with response:
+                _read_body(response, deadline)
         if response.is_redirect:
             raise ProviderError(_("The AI provider attempted an HTTP redirect, which is blocked for security."))
         if not response.ok:
@@ -167,6 +227,7 @@ class ProviderClient:
                 error = ProviderError(_("AI provider error %(status)s: %(detail)s", status=response.status_code, detail=detail))
             error.status_code = response.status_code
             error.error_code = _json_error_code(response)
+            error.retry_after = response.headers.get("Retry-After")
             raise error
         if raw:
             return response.content
@@ -261,7 +322,7 @@ class ProviderClient:
                 "type": "json_schema",
                 "json_schema": {"name": "odoo_response", "strict": True, "schema": _strict_schema(options["schema"])},
             }
-        data = self._request("POST", "chat/completions", payload)
+        data = self._request("POST", "chat/completions", payload, idempotent=False)
         choices = data.get("choices") or []
         if not choices:
             raise ProviderError(_("The AI provider returned no completion."))
@@ -297,7 +358,7 @@ class ProviderClient:
             } for tool in tools]
         if options.get("schema"):
             payload["system"] = (payload.get("system", "") + "\nReturn valid JSON matching this schema: " + json.dumps(options["schema"])).strip()
-        data = self._request("POST", "messages", payload)
+        data = self._request("POST", "messages", payload, idempotent=False)
         content = []
         for block in data.get("content") or []:
             if block.get("type") == "text":

@@ -1,8 +1,26 @@
+import io
+import json
+import time
 from unittest.mock import MagicMock, patch
+
+import requests
 
 from odoo.tests.common import TransactionCase
 
+from ..services import client as client_module
 from ..services.client import ProviderClient, ProviderError, _to_anthropic_messages, _to_openai_messages, validate_endpoint
+
+SESSION_REQUEST = "odoo.addons.ibt_custom_ai_provider.services.client.requests.Session.request"
+SLEEP = "odoo.addons.ibt_custom_ai_provider.services.client.time.sleep"
+
+
+def http_response(status=200, body=None, headers=None):
+    response = requests.Response()
+    response.status_code = status
+    response.reason = "Test"
+    response.headers.update(headers or {})
+    response.raw = io.BytesIO(json.dumps({"data": []} if body is None else body).encode())
+    return response
 
 
 class TestProviderClient(TransactionCase):
@@ -59,7 +77,8 @@ class TestProviderClient(TransactionCase):
 
     @patch("odoo.addons.ibt_custom_ai_provider.services.client.requests.Session")
     @patch("odoo.addons.ibt_custom_ai_provider.services.client.socket.getaddrinfo")
-    def test_proxy_error_page_becomes_a_clear_message(self, getaddrinfo, Session):
+    @patch(SLEEP)
+    def test_proxy_error_page_becomes_a_clear_message(self, sleep, getaddrinfo, Session):
         getaddrinfo.return_value = [(2, 1, 6, "", ("192.168.10.12", 443))]
         response = MagicMock(ok=False, is_redirect=False, status_code=502, reason="Bad Gateway",
                              headers={"Content-Type": "text/html"},
@@ -118,3 +137,60 @@ class TestProviderClient(TransactionCase):
         self.assertTrue(model.supports_tools)
         self.assertIn("1 incompatible embedding model", action["params"]["message"])
 
+
+
+@patch(SLEEP)
+class TestProviderClientResilience(TransactionCase):
+
+    def setUp(self):
+        super().setUp()
+        self.client = ProviderClient({
+            "transport": "openai",
+            "base_url": "http://127.0.0.1:9/v1",
+            "allow_private_network": True,
+            "chat_model": "chat-model",
+        })
+
+    def test_connection_failure_is_retried(self, sleep):
+        with patch(SESSION_REQUEST, side_effect=[requests.ConnectionError("refused"), http_response()]) as request:
+            self.assertEqual(self.client._request("GET", "models"), {"data": []})
+        self.assertEqual(request.call_count, 2)
+
+    def test_retry_after_is_honored_and_retries_are_bounded(self, sleep):
+        busy = [http_response(429, {"error": "busy"}, {"Retry-After": "7"}) for _ in range(3)]
+        with patch(SESSION_REQUEST, side_effect=busy) as request, self.assertRaises(ProviderError):
+            self.client._request("GET", "models")
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [7.0, 7.0])
+
+    def test_completion_is_not_resent_once_accepted(self, sleep):
+        for failure in (http_response(504, {"error": "gateway timeout"}), requests.ReadTimeout("slow")):
+            with self.subTest(failure=failure), patch(SESSION_REQUEST, side_effect=[failure]) as request, \
+                    self.assertRaises(ProviderError):
+                self.client.completions([], "")
+            self.assertEqual(request.call_count, 1)
+
+    def test_completion_rejected_by_the_provider_is_resent(self, sleep):
+        answer = {"choices": [{"message": {"content": "Hello"}}]}
+        responses = [http_response(503, {"error": "loading model"}), http_response(body=answer)]
+        with patch(SESSION_REQUEST, side_effect=responses):
+            self.assertIn("Hello", str(self.client.completions([], "")))
+
+    def test_response_size_is_capped(self, sleep):
+        with patch.object(client_module, "MAX_BODY_BYTES", 10):
+            for headers in ({"Content-Length": "11"}, {}):
+                with self.subTest(headers=headers), patch(SESSION_REQUEST, return_value=http_response(headers=headers)), \
+                        self.assertRaisesRegex(ProviderError, "too large"):
+                    self.client._request("GET", "models")
+
+    def test_deadline_bounds_requests_and_retries(self, sleep):
+        self.client.config["deadline"] = time.monotonic() + 1.5
+        with patch(SESSION_REQUEST, return_value=http_response(503, {"error": "busy"}, {"Retry-After": "5"})) as request, \
+                self.assertRaises(ProviderError):
+            self.client._request("GET", "models")
+        self.assertEqual((request.call_count, sleep.call_count), (1, 0))
+        self.assertLessEqual(request.call_args.kwargs["timeout"][1], 1.5)
+        self.client.config["deadline"] = time.monotonic() - 1
+        with patch(SESSION_REQUEST) as request, self.assertRaises(ProviderError):
+            self.client._request("GET", "models")
+        request.assert_not_called()

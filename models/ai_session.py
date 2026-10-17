@@ -1,5 +1,7 @@
 import copy
 import logging
+import math
+import time
 import uuid
 
 from odoo import api, fields, models
@@ -8,6 +10,8 @@ from ..services.client import ProviderClient, ProviderError
 
 _logger = logging.getLogger(__name__)
 BATCH_SIZE = 4
+# Seconds kept from the cron's time limit to deliver an answer and commit.
+DELIVERY_MARGIN = 30
 
 
 class AiSession(models.Model):
@@ -70,8 +74,12 @@ class AiSession(models.Model):
             ("ibt_ai_provider_id", "!=", False),
         ]
         sessions = self.sudo().search(domain, order="write_date, id", limit=BATCH_SIZE)
-        self.env["ir.cron"]._commit_progress(remaining=self.sudo().search_count(domain))
+        cron_end = time.monotonic() + self.env["ir.cron"]._commit_progress(remaining=self.sudo().search_count(domain))
         for session in sessions:
+            # A request that cannot finish before the cron is stopped waits
+            # for the next run instead.
+            if cron_end - time.monotonic() <= DELIVERY_MARGIN:
+                break
             self.env.cr.execute(
                 "SELECT pg_try_advisory_xact_lock(hashtext(%s), %s)",
                 ["ibt_custom_ai_provider", session.id],
@@ -83,7 +91,7 @@ class AiSession(models.Model):
                 continue
             try:
                 with self.env.cr.savepoint():
-                    session._process_ibt_ai_request()
+                    session._process_ibt_ai_request(cron_end - DELIVERY_MARGIN)
             except Exception:
                 _logger.exception("Unexpected failure while processing queued AI session %s", session.id)
                 try:
@@ -97,10 +105,9 @@ class AiSession(models.Model):
                     # rest of the bounded cron batch.
                     _logger.exception("Unable to deliver failure for queued AI session %s", session.id)
                     session.write({"loop_state": "ready", "ibt_ai_provider_id": False})
-            if not self.env["ir.cron"]._commit_progress(1):
-                break
+            self.env["ir.cron"]._commit_progress(1)
 
-    def _process_ibt_ai_request(self):
+    def _process_ibt_ai_request(self, deadline=math.inf):
         self.ensure_one()
         company = self.ibt_ai_company_id
         payload = copy.deepcopy(self.request_payload)
@@ -111,6 +118,7 @@ class AiSession(models.Model):
                 "The AI provider configuration changed while this request was queued. Please try again.",
             )
         options = {key: value for key, value in payload.items() if key not in ("messages", "instructions", "tools")}
+        config["deadline"] = deadline
         try:
             result = ProviderClient(config).completions(
                 payload["messages"], payload.get("instructions", ""), payload.get("tools"), **options,

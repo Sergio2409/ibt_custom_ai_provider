@@ -28,6 +28,17 @@ store.
 
 ### 2. Add resilient, bounded HTTP behavior
 
+Done, trimmed to the deployment: every request has one total
+deadline (the provider timeout, and the cron run's remaining time minus 30 s
+for queued requests); bodies are streamed and capped at 32 MiB; connection
+failures and HTTP 429/502/503/504 are retried twice with backoff and jitter,
+honoring `Retry-After` within the deadline; completions are resent only after
+429/503 or a failed connection, never after a read timeout, 502 or 504.
+Deliberately not done: per-provider configurable policies (fixed constants
+suffice), connection-pool limits (each request uses its own session) and
+idempotency keys (OpenAI chat and Anthropic do not support them). User-facing
+messages were already generic; `ProviderError.retryable` is left for item 3.
+
 - Add configurable retry policies for connection failures, HTTP 429 and
   transient 5xx responses, respecting `Retry-After` where available.
 - Use exponential backoff with jitter and a strict total request deadline so
