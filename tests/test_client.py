@@ -166,9 +166,14 @@ class TestProviderClientResilience(TransactionCase):
     def test_completion_is_not_resent_once_accepted(self, sleep):
         for failure in (http_response(504, {"error": "gateway timeout"}), requests.ReadTimeout("slow")):
             with self.subTest(failure=failure), patch(SESSION_REQUEST, side_effect=[failure]) as request, \
-                    self.assertRaises(ProviderError):
+                    self.assertRaises(ProviderError) as ctx:
                 self.client.completions([], "")
             self.assertEqual(request.call_count, 1)
+            self.assertTrue(ctx.exception.transient, "the queue retries it on a later run")
+        with patch(SESSION_REQUEST, return_value=http_response(401, {"error": "bad key"})), \
+                self.assertRaises(ProviderError) as ctx:
+            self.client.completions([], "")
+        self.assertFalse(ctx.exception.transient)
 
     def test_completion_rejected_by_the_provider_is_resent(self, sleep):
         answer = {"choices": [{"message": {"content": "Hello"}}]}

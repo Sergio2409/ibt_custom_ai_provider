@@ -56,6 +56,19 @@ responses.
 
 ### 3. Complete queue lifecycle and recovery
 
+Done in 20.0.1.3.0, trimmed: queued sessions record when they were queued,
+their retries and the next attempt. A transient failure (network, timeout,
+429/5xx) is retried on a later cron run after 30 s, 60 s, 120 s, ...; a
+permanent one fails at once. A request still pending 10 minutes after it was
+queued, including one whose worker was stopped mid-call (its transaction is
+rolled back, so it stays queued), fails visibly instead of being retried
+forever. Already covered by Odoo: a deleted channel deletes its sessions
+(cascade), a cancelled or declined exchange returns the session to `ready`
+and the cron skips it, a user with sessions cannot be deleted. Concurrency:
+one cron job runs in one worker at a time; the per-session advisory lock and
+the `waiting_model` re-check guard other paths. Not done: a separate request
+model and a failed-requests view (item 6).
+
 - Persist attempt count, next-attempt time, last error category and terminal
   failure time on queued sessions or a dedicated request model.
 - Add bounded retries and a dead-letter/failed state instead of immediately

@@ -3,6 +3,7 @@ import logging
 import math
 import time
 import uuid
+from datetime import timedelta
 
 from odoo import api, fields, models
 
@@ -12,6 +13,10 @@ _logger = logging.getLogger(__name__)
 BATCH_SIZE = 4
 # Seconds kept from the cron's time limit to deliver an answer and commit.
 DELIVERY_MARGIN = 30
+# A request that keeps failing (or stopping the worker) fails visibly once it
+# has waited this long; transient failures are retried after 30 s, 60 s, ...
+MAX_QUEUE_WAIT = timedelta(minutes=10)
+RETRY_DELAY = timedelta(seconds=30)
 
 
 class AiSession(models.Model):
@@ -19,6 +24,9 @@ class AiSession(models.Model):
 
     ibt_ai_provider_id = fields.Many2one("ibt.ai.provider", copy=False, readonly=True)
     ibt_ai_company_id = fields.Many2one("res.company", copy=False, readonly=True)
+    ibt_ai_queued_at = fields.Datetime(copy=False, readonly=True)
+    ibt_ai_attempts = fields.Integer(copy=False, readonly=True)
+    ibt_ai_next_attempt = fields.Datetime(copy=False, readonly=True)
 
     def _get_completions(self, messages, instructions, tools=None, **options):
         config = self.env.company._ibt_ai_config(boost_reasoning=options.get("boost_reasoning", False))
@@ -63,6 +71,9 @@ class AiSession(models.Model):
             "state": state,
             "ibt_ai_provider_id": config["id"],
             "ibt_ai_company_id": self.env.company.id,
+            "ibt_ai_queued_at": fields.Datetime.now(),
+            "ibt_ai_attempts": 0,
+            "ibt_ai_next_attempt": False,
         })
         self._publish_response_state()
         self.env.ref("ibt_custom_ai_provider.ir_cron_ibt_ai_requests")._trigger()
@@ -72,6 +83,7 @@ class AiSession(models.Model):
         domain = [
             ("loop_state", "=", "waiting_model"),
             ("ibt_ai_provider_id", "!=", False),
+            "|", ("ibt_ai_next_attempt", "=", False), ("ibt_ai_next_attempt", "<=", fields.Datetime.now()),
         ]
         sessions = self.sudo().search(domain, order="write_date, id", limit=BATCH_SIZE)
         cron_end = time.monotonic() + self.env["ir.cron"]._commit_progress(remaining=self.sudo().search_count(domain))
@@ -117,6 +129,10 @@ class AiSession(models.Model):
                 {"kind": "failure", "code": "provider_configuration_changed"},
                 "The AI provider configuration changed while this request was queued. Please try again.",
             )
+        if self.ibt_ai_queued_at and self.ibt_ai_queued_at < fields.Datetime.now() - MAX_QUEUE_WAIT:
+            _logger.warning("AI provider request %s gave up: queued since %s, %s retries",
+                            self.request_uuid, self.ibt_ai_queued_at, self.ibt_ai_attempts)
+            return self._deliver_ibt_ai_result({"kind": "failure", "code": "provider_request_failed"})
         options = {key: value for key, value in payload.items() if key not in ("messages", "instructions", "tools")}
         config["deadline"] = deadline
         try:
@@ -127,6 +143,10 @@ class AiSession(models.Model):
             error_message = None
         except ProviderError as error:
             _logger.warning("AI provider request %s failed: %s", self.request_uuid, error)
+            if error.transient:
+                next_attempt = fields.Datetime.now() + RETRY_DELAY * 2 ** self.ibt_ai_attempts
+                self.write({"ibt_ai_attempts": self.ibt_ai_attempts + 1, "ibt_ai_next_attempt": next_attempt})
+                return self.env.ref("ibt_custom_ai_provider.ir_cron_ibt_ai_requests")._trigger(next_attempt)
             completion_result = {"kind": "failure", "code": "provider_request_failed"}
             error_message = str(error)
         except Exception:

@@ -31,8 +31,16 @@ class ProviderError(UserError):
     status_code = None
     error_code = None
     retry_after = None
-    # Connection refused, reset or unreachable (not a read timeout).
+    # Connection refused, reset or unreachable (not a read timeout): safe to
+    # resend at once.
     retryable = False
+    # Network, time or 429/5xx failure that may succeed later (queue retry).
+    transient = False
+
+
+def _transient(error):
+    error.transient = True
+    return error
 
 
 def _resolve_endpoint(url, allow_private=False, resolve=True):
@@ -108,9 +116,9 @@ def _read_body(response, deadline):
             if len(body) > MAX_BODY_BYTES:
                 raise ProviderError(_("The AI provider response is too large."))
             if time.monotonic() > deadline:
-                raise ProviderError(_("The AI provider did not answer in time."))
+                raise _transient(ProviderError(_("The AI provider did not answer in time.")))
     except requests.RequestException as error:
-        raise ProviderError(_("The AI provider connection failed during the answer: %s", str(error))) from error
+        raise _transient(ProviderError(_("The AI provider connection failed during the answer: %s", str(error)))) from error
     response._content = bytes(body)
 
 
@@ -207,7 +215,7 @@ class ProviderClient:
                 except requests.RequestException as error:
                     last_error = error
             if response is None:
-                error = ProviderError(_("The AI provider could not be reached: %s", str(last_error or "timeout")))
+                error = _transient(ProviderError(_("The AI provider could not be reached: %s", str(last_error or "timeout"))))
                 # A read timeout means the provider may be working on it.
                 error.retryable = isinstance(last_error, requests.ConnectionError)
                 raise error from last_error
@@ -228,6 +236,7 @@ class ProviderClient:
             error.status_code = response.status_code
             error.error_code = _json_error_code(response)
             error.retry_after = response.headers.get("Retry-After")
+            error.transient = response.status_code in RETRY_STATUSES
             raise error
         if raw:
             return response.content
