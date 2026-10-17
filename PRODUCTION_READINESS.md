@@ -85,6 +85,17 @@ indefinitely.
 
 ### 4. Enforce model capabilities before dispatch
 
+Done in 20.0.1.4.0, trimmed: each model has editable flags for tools, images
+and PDF files (Ollama discovery sets them, PDF off; models created by hand
+start with all on). A request needing a missing capability, any other file
+type, or more than 20 MB of attachments is refused before it is sent, with a
+message that names the model. PDF files reach Anthropic as documents and
+OpenAI-compatible APIs as file parts instead of a placeholder text. Structured
+answers are parsed (Markdown fences removed) and checked against the requested
+schema with a built-in subset validator (type, enum, anyOf, properties,
+required, additionalProperties, items). Not done: per-transport defaults and
+re-asking the model after an invalid structured answer.
+
 - Validate tool calls, vision input and structured output against model
   capabilities instead of relying on provider failures.
 - Store explicit capability flags for all provider kinds, with an administrator

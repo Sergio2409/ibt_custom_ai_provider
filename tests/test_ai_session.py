@@ -6,7 +6,7 @@ from unittest.mock import patch
 from odoo import Command, fields
 from odoo.tests.common import TransactionCase, new_test_user
 
-from ..services.client import ProviderClient, ProviderError
+from ..services.client import CapabilityError, ProviderClient, ProviderError
 
 
 class TestIbtAiSession(TransactionCase):
@@ -162,3 +162,10 @@ class TestIbtAiQueue(TransactionCase):
             self._run_cron(budget=200)
         deadline = completions.call_args.args[0].config["deadline"]
         self.assertLessEqual(deadline, time.monotonic() + 170)
+
+    def test_unsupported_request_tells_the_user_why(self):
+        with patch.object(ProviderClient, "completions", side_effect=CapabilityError("The AI model x cannot handle images.")), \
+                patch.object(type(self.session), "_finish_exchange") as finish:
+            self._run_cron()
+        self.assertEqual(finish.call_args.kwargs["content"], "The AI model x cannot handle images.")
+        self.assertEqual(self.session.ibt_ai_attempts, 0)

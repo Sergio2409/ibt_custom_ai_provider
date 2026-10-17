@@ -64,6 +64,7 @@
                                     <field name="embedding_dimensions" invisible="model_type != 'embedding'"/>
                                     <field name="supports_tools" optional="show"/>
                                     <field name="supports_vision" optional="hide"/>
+                                    <field name="supports_pdf" optional="hide"/>
                                     <field name="capabilities" optional="hide"/>
                                     <field name="active" widget="boolean_toggle"/>
                                 </list>

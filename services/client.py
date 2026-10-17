@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import random
+import re
 import socket
 import time
 from urllib.parse import urljoin, urlparse
@@ -19,6 +20,8 @@ EMBEDDING_DIMENSIONS = 1536
 MAX_ERROR_LENGTH = 800
 MAX_BODY_BYTES = 32 * 1024 * 1024
 MAX_RETRIES = 2
+MAX_INLINE_BYTES = 20 * 1024 * 1024
+JSON_TYPES = {"object": dict, "array": list, "string": str, "integer": int, "number": (int, float), "boolean": bool, "null": type(None)}
 RETRY_STATUSES = {429, 502, 503, 504}
 # The provider refused these without working on them: resending a completion
 # cannot produce a second answer.
@@ -36,6 +39,10 @@ class ProviderError(UserError):
     retryable = False
     # Network, time or 429/5xx failure that may succeed later (queue retry).
     transient = False
+
+
+class CapabilityError(ProviderError):
+    """The selected model cannot handle this request; shown to the user as is."""
 
 
 def _transient(error):
@@ -291,9 +298,41 @@ class ProviderClient:
             raise ProviderError(_("Image generation is not supported by this provider adapter."))
         if not self.config.get("chat_model"):
             raise ProviderError(_("No chat model is configured for this company."))
+        self._check_capabilities(messages, tools)
         if self.config["transport"] == "anthropic":
-            return self._anthropic_completion(messages, instructions, tools, options)
-        return self._openai_completion(messages, instructions, tools, options)
+            result = self._anthropic_completion(messages, instructions, tools, options)
+        else:
+            result = self._openai_completion(messages, instructions, tools, options)
+        content = result["result"]["content"]
+        if options.get("schema") and not any(part.get("type") == "tool_call" for part in content):
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", "".join(part.get("text", "") for part in content).strip())
+            try:
+                valid = _matches(json.loads(text), options["schema"])
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ProviderError(_("The AI provider returned an answer that does not match the requested structure."))
+            result["result"]["content"] = [{"type": "text", "text": text}]
+        return result
+
+    def _check_capabilities(self, messages, tools):
+        supports = self.config.get("supports") or {}
+        parts = [part for message in messages for part in message.get("content") or [] if part.get("type") == "inline_data"]
+        needs = {"tools": _("tools")} if tools else {}
+        for part in parts:
+            mimetype = part.get("mimetype") or ""
+            kind = "vision" if mimetype.startswith("image/") else "pdf" if mimetype == "application/pdf" else mimetype
+            needs[kind] = {"vision": _("images"), "pdf": _("PDF files")}.get(kind) or _("%s files", mimetype)
+        for kind, what in needs.items():
+            # Other file types are never sent; without flags (no chat model
+            # record) the known capabilities count as supported.
+            if not supports.get(kind, kind in ("tools", "vision", "pdf")):
+                raise CapabilityError(_(
+                    "The AI model %(model)s cannot handle %(what)s. Ask an administrator to choose another model "
+                    "or to enable this capability on the model.", model=self.config["chat_model"], what=what,
+                ))
+        if sum(len(part.get("data") or "") for part in parts) * 3 // 4 > MAX_INLINE_BYTES:
+            raise CapabilityError(_("The attached files are too large for the AI model (20 MB at most)."))
 
     def embeddings(self, inputs, model=None):
         if self.config["transport"] == "anthropic":
@@ -386,7 +425,7 @@ def _inline_openai(part):
     data = f"data:{mimetype};base64,{part.get('data', '')}"
     if mimetype.startswith("image/"):
         return {"type": "image_url", "image_url": {"url": data}}
-    return {"type": "text", "text": f"[Unsupported attachment: {mimetype}]"}
+    return {"type": "file", "file": {"filename": "document.pdf", "file_data": data}}
 
 
 def _to_openai_messages(messages, instructions):
@@ -434,11 +473,39 @@ def _to_anthropic_messages(messages):
             elif kind == "tool_result":
                 blocks = [{"type": "text", "text": p.get("text", "")} for p in part.get("result", []) if p.get("type") == "text"]
                 content.append({"type": "tool_result", "tool_use_id": str(part["tool_call_id"]), "content": blocks or "OK", "is_error": not part.get("success", True)})
-            elif kind == "inline_data" and (part.get("mimetype") or "").startswith("image/"):
-                content.append({"type": "image", "source": {"type": "base64", "media_type": part["mimetype"], "data": part["data"]}})
+            elif kind == "inline_data":
+                block = "image" if part["mimetype"].startswith("image/") else "document"
+                content.append({"type": block, "source": {"type": "base64", "media_type": part["mimetype"], "data": part["data"]}})
         if content:
             result.append({"role": message["role"], "content": content})
     return result
+
+
+def _matches(value, schema):
+    """Subset of JSON Schema (type, enum, anyOf, properties, required,
+    additionalProperties, items); unknown keywords are accepted."""
+    if "anyOf" in schema:
+        return any(_matches(value, option) for option in schema["anyOf"])
+    types = schema.get("type") or []
+    if types and not any(
+        isinstance(value, JSON_TYPES.get(name, object)) and not (isinstance(value, bool) and name in ("integer", "number"))
+        for name in (types if isinstance(types, list) else [types])
+    ):
+        return False
+    if "enum" in schema and value not in schema["enum"]:
+        return False
+    if isinstance(value, dict):
+        properties, required = schema.get("properties", {}), schema.get("required", [])
+        if any(name not in value for name in required) or (
+            schema.get("additionalProperties") is False and set(value) - set(properties)
+        ):
+            return False
+        # Optional fields may be null: strict mode makes them nullable.
+        return all(_matches(item, properties[name]) for name, item in value.items()
+                   if name in properties and not (item is None and name not in required))
+    if isinstance(value, list) and "items" in schema:
+        return all(_matches(item, schema["items"]) for item in value)
+    return True
 
 
 def _strict_schema(value):

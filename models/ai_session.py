@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from odoo import api, fields, models
 
-from ..services.client import ProviderClient, ProviderError
+from ..services.client import CapabilityError, ProviderClient, ProviderError
 
 _logger = logging.getLogger(__name__)
 BATCH_SIZE = 4
@@ -147,7 +147,8 @@ class AiSession(models.Model):
                 next_attempt = fields.Datetime.now() + RETRY_DELAY * 2 ** self.ibt_ai_attempts
                 self.write({"ibt_ai_attempts": self.ibt_ai_attempts + 1, "ibt_ai_next_attempt": next_attempt})
                 return self.env.ref("ibt_custom_ai_provider.ir_cron_ibt_ai_requests")._trigger(next_attempt)
-            completion_result = {"kind": "failure", "code": "provider_request_failed"}
+            code = "unsupported_request" if isinstance(error, CapabilityError) else "provider_request_failed"
+            completion_result = {"kind": "failure", "code": code}
             error_message = str(error)
         except Exception:
             _logger.exception("Unexpected AI provider failure for request %s", self.request_uuid)
@@ -181,7 +182,7 @@ class AiSession(models.Model):
         callback_type = session.state["callback_type"]
         if callback_type == "agent_loop":
             if completion_result["kind"] == "failure":
-                if completion_result.get("code") == "provider_configuration_changed":
+                if completion_result.get("code") in ("provider_configuration_changed", "unsupported_request"):
                     user_message = error_message or self.env._(
                         "The AI provider configuration changed while this request was queued. Please try again."
                     )

@@ -199,3 +199,59 @@ class TestProviderClientResilience(TransactionCase):
         with patch(SESSION_REQUEST) as request, self.assertRaises(ProviderError):
             self.client._request("GET", "models")
         request.assert_not_called()
+
+
+class TestModelCapabilities(TransactionCase):
+
+    def _client(self, transport="openai", **supports):
+        return ProviderClient({
+            "transport": transport,
+            "base_url": "http://127.0.0.1:9/v1",
+            "allow_private_network": True,
+            "chat_model": "small-model",
+            "supports": dict({"tools": True, "vision": True, "pdf": True}, **supports),
+        })
+
+    def _ask(self, mimetype, data="UERG"):
+        return [{"role": "user", "content": [{"type": "inline_data", "mimetype": mimetype, "data": data}]}]
+
+    def test_unsupported_requests_are_rejected_before_sending(self):
+        cases = [
+            (self._client(tools=False), [], [{"name": "find"}], "tools"),
+            (self._client(vision=False), self._ask("image/png"), None, "images"),
+            (self._client(pdf=False), self._ask("application/pdf"), None, "PDF files"),
+            (self._client(), self._ask("application/zip"), None, "application/zip files"),
+            (self._client(), self._ask("application/pdf", "A" * 28_000_000), None, "too large"),
+        ]
+        for client, messages, tools, message in cases:
+            with self.subTest(message=message), patch(SESSION_REQUEST) as request, \
+                    self.assertRaisesRegex(client_module.CapabilityError, message):
+                client.completions(messages, "", tools)
+            request.assert_not_called()
+
+    def test_pdf_reaches_both_transports(self):
+        answers = {"openai": {"choices": [{"message": {"content": "ok"}}]}, "anthropic": {"content": [{"type": "text", "text": "ok"}]}}
+        for transport, answer in answers.items():
+            with self.subTest(transport=transport), patch(SESSION_REQUEST, return_value=http_response(body=answer)) as request:
+                self._client(transport).completions(self._ask("application/pdf"), "")
+            part = request.call_args.kwargs["json"]["messages"][-1]["content"][0]
+            self.assertIn(part["type"], ("file", "document"))
+
+    def test_structured_answer_is_validated(self):
+        schema = {"type": "object", "properties": {"title": {"type": "string"}, "note": {"type": "string"}},
+                  "required": ["title"], "additionalProperties": False}
+        for text, valid in [
+            ('```json\n{"title": "Hi", "note": null}\n```', True),
+            ('{"note": "no title"}', False),
+            ('{"title": 3}', False),
+            ('{"title": "Hi", "extra": 1}', False),
+            ("not json", False),
+        ]:
+            answer = {"choices": [{"message": {"content": text}}]}
+            with self.subTest(text=text), patch(SESSION_REQUEST, return_value=http_response(body=answer)):
+                if valid:
+                    result = self._client().completions([], "", schema=schema)
+                    self.assertEqual(result["result"]["content"], [{"type": "text", "text": '{"title": "Hi", "note": null}'}])
+                else:
+                    with self.assertRaisesRegex(ProviderError, "requested structure"):
+                        self._client().completions([], "", schema=schema)

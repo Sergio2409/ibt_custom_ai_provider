@@ -187,6 +187,7 @@ class IbtAiProvider(models.Model):
             "timeout": self.timeout,
             "send_embedding_dimensions": self.send_embedding_dimensions,
             "chat_model": chat_model.name if chat_model else "",
+            "supports": {kind: chat_model[f"supports_{kind}"] for kind in ("tools", "vision", "pdf")} if chat_model else {},
             "embedding_model": embedding_model.name if embedding_model else "",
         }
 
@@ -287,6 +288,7 @@ class IbtAiProvider(models.Model):
                 "capabilities": ", ".join(item.get("capabilities", [])),
                 "supports_tools": "tools" in item.get("capabilities", []),
                 "supports_vision": "vision" in item.get("capabilities", []),
+                "supports_pdf": False,
             }
             if model:
                 model.write(values)
@@ -361,8 +363,11 @@ class IbtAiProviderModel(models.Model):
     model_type = fields.Selection([("chat", "Chat"), ("embedding", "Embedding")], required=True, default="chat")
     embedding_dimensions = fields.Integer(default=1536)
     capabilities = fields.Char(readonly=True)
-    supports_tools = fields.Boolean(readonly=True)
-    supports_vision = fields.Boolean(readonly=True)
+    # Checked before each request; Ollama discovery sets them, administrators
+    # may override them (e.g. for a generic OpenAI-compatible endpoint).
+    supports_tools = fields.Boolean(default=True)
+    supports_vision = fields.Boolean(string="Supports Images", default=True)
+    supports_pdf = fields.Boolean(string="Supports PDF", default=True)
 
     _provider_type_name_unique = models.Constraint(
         "UNIQUE(provider_id, model_type, name)",
