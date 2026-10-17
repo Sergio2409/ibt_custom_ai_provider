@@ -1,4 +1,5 @@
 from odoo import api, fields, models
+from odoo.exceptions import ValidationError
 
 
 class ResConfigSettings(models.TransientModel):
@@ -37,8 +38,16 @@ class ResConfigSettings(models.TransientModel):
     ibt_speech_realtime = fields.Boolean(related="company_id.ibt_speech_realtime", readonly=False)
     ibt_speech_voice_replies = fields.Boolean(related="company_id.ibt_speech_voice_replies", readonly=False)
     ibt_speech_voice_mode = fields.Boolean(related="company_id.ibt_speech_voice_mode", readonly=False)
-    ibt_speech_voice_es = fields.Char(related="company_id.ibt_speech_voice_es", readonly=False)
-    ibt_speech_voice_en = fields.Char(related="company_id.ibt_speech_voice_en", readonly=False)
+    ibt_speech_voice_es_id = fields.Many2one(
+        related="company_id.ibt_speech_voice_es_id",
+        readonly=False,
+        domain="[('provider_id', '=', ibt_speech_provider_id), ('language', '=like', 'es%')]",
+    )
+    ibt_speech_voice_en_id = fields.Many2one(
+        related="company_id.ibt_speech_voice_en_id",
+        readonly=False,
+        domain="[('provider_id', '=', ibt_speech_provider_id)]",
+    )
 
     @api.onchange("ibt_ai_provider_id")
     def _onchange_ibt_ai_provider_id(self):
@@ -55,6 +64,20 @@ class ResConfigSettings(models.TransientModel):
         provider = self.ibt_ai_embedding_provider_id
         if self.ibt_ai_embedding_model_id.provider_id != provider:
             self.ibt_ai_embedding_model_id = provider.model_ids.filtered(lambda model: model.model_type == "embedding")[:1]
+
+    @api.onchange("ibt_speech_provider_id")
+    def _onchange_ibt_speech_provider_id(self):
+        provider = self.ibt_speech_provider_id
+        if self.ibt_speech_voice_es_id.provider_id != provider:
+            self.ibt_speech_voice_es_id = False
+        if self.ibt_speech_voice_en_id.provider_id != provider:
+            self.ibt_speech_voice_en_id = False
+
+    def action_ibt_discover_voices(self):
+        self.ensure_one()
+        if not self.ibt_speech_provider_id:
+            raise ValidationError(self.env._("Select a speech gateway first."))
+        return self.ibt_speech_provider_id.action_discover_voices()
 
     def set_values(self):
         companies = self.company_id

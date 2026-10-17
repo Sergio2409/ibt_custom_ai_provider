@@ -1,3 +1,4 @@
 id,name,model_id,group_id/id,operation,domain
 access_ibt_ai_provider_system,ibt.ai.provider system,ibt.ai.provider,base.group_system,crud,
 access_ibt_ai_provider_model_system,ibt.ai.provider.model system,ibt.ai.provider.model,base.group_system,crud,
+access_ibt_ai_provider_voice_system,ibt.ai.provider.voice system,ibt.ai.provider.voice,base.group_system,crud,

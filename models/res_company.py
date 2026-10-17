@@ -1,7 +1,6 @@
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
-from ..services import speech
 
 
 class ResCompany(models.Model):
@@ -33,13 +32,15 @@ class ResCompany(models.Model):
         string="Voice Mode",
         help="After a user sends a voice message in an AI chat, the agent's answer is read aloud automatically.",
     )
-    ibt_speech_voice_es = fields.Char(
-        string="Spanish Voice", default="ef_dora",
-        help="Gateway voice for users whose language is Spanish, e.g. ef_dora (female), em_alex (male).",
+    ibt_speech_voice_es_id = fields.Many2one(
+        "ibt.ai.provider.voice", string="Spanish Voice", ondelete="set null",
+        help="Voice for users whose language is Spanish. The list comes from the speech gateway "
+             "(Discover Voices); empty = ef_dora.",
     )
-    ibt_speech_voice_en = fields.Char(
-        string="Other Languages Voice", default="af_heart",
-        help="Gateway voice for every other language, e.g. af_heart (female), am_michael (male).",
+    ibt_speech_voice_en_id = fields.Many2one(
+        "ibt.ai.provider.voice", string="Other Languages Voice", ondelete="set null",
+        help="Voice for every other language. The list comes from the speech gateway "
+             "(Discover Voices); empty = af_heart.",
     )
     ibt_speech_correction = fields.Selection(
         [
@@ -91,18 +92,15 @@ class ResCompany(models.Model):
             realtime=self.ibt_speech_realtime,
             voice_replies=self.ibt_speech_voice_replies,
             voice_mode=self.ibt_speech_voice_replies and self.ibt_speech_voice_mode,
-            voice_es=self.ibt_speech_voice_es or "ef_dora",
-            voice_en=self.ibt_speech_voice_en or "af_heart",
+            voice_es=self._ibt_speech_voice_name(self.ibt_speech_voice_es_id, provider, "ef_dora"),
+            voice_en=self._ibt_speech_voice_name(self.ibt_speech_voice_en_id, provider, "af_heart"),
         )
 
-    @api.constrains("ibt_speech_voice_es", "ibt_speech_voice_en")
-    def _check_ibt_speech_voices(self):
-        for company in self:
-            for voice in (company.ibt_speech_voice_es, company.ibt_speech_voice_en):
-                if voice and not speech.VOICE_RE.match(voice):
-                    raise ValidationError(self.env._(
-                        "%s is not a voice name; use a gateway voice such as ef_dora or af_heart.", voice,
-                    ))
+    @api.model
+    def _ibt_speech_voice_name(self, voice, provider, default):
+        """The selected voice if it belongs to the active gateway, else the default."""
+        voice = voice.sudo()
+        return voice.name if voice and voice.active and voice.provider_id == provider else default
 
     @api.constrains("ibt_speech_enabled", "ibt_speech_provider_id")
     def _check_ibt_speech_settings(self):

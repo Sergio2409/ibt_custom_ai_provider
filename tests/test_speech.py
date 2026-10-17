@@ -472,9 +472,87 @@ class TestVoiceReplyText(TransactionCase):
         self.assertEqual(body, {"model": "tts-1", "voice": "ef_dora", "input": "Hola", "response_format": "mp3"})
         self.assertTrue(request.call_args.kwargs["raw"])
 
-    def test_invalid_voice_is_rejected(self):
+
+
+GATEWAY_VOICES = {"voices": [
+    {"id": "af_heart", "name": "af_heart", "language": "en-us", "gender": "female"},
+    {"id": "am_michael", "name": "am_michael", "language": "en-us", "gender": "male"},
+    {"id": "ef_dora", "name": "ef_dora", "language": "es", "gender": "female"},
+    {"id": "em_alex", "name": "em_alex", "language": "es", "gender": "male"},
+    {"id": "Bad Voice; drop", "language": "es"},
+]}
+
+
+class TestVoiceDiscovery(SpeechSetupMixin, TransactionCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._create_speech_setup()
+
+    def voices(self, provider=None):
+        return self.env["ibt.ai.provider.voice"].with_context(active_test=False).search(
+            [("provider_id", "=", (provider or self.speech_provider).id)])
+
+    @patch(REQUEST)
+    def test_discovery_lists_voices_and_picks_defaults(self, request):
+        request.return_value = GATEWAY_VOICES
+        self.speech_provider.action_discover_voices()
+        self.assertEqual(request.call_args.args[:2], ("GET", "audio/voices"))
+        voices = self.voices()
+        self.assertEqual(sorted(voices.mapped("name")), ["af_heart", "am_michael", "ef_dora", "em_alex"])
+        dora = voices.filtered(lambda voice: voice.name == "ef_dora")
+        self.assertEqual((dora.language, dora.gender), ("es", "female"))
+        self.assertEqual(dora.display_name, "ef_dora (es, Female)")
+        self.assertEqual(self.company.ibt_speech_voice_es_id, dora)
+        self.assertEqual(self.company.ibt_speech_voice_en_id.name, "af_heart")
+        config = self.company._ibt_speech_config()
+        self.assertEqual((config["voice_es"], config["voice_en"]), ("ef_dora", "af_heart"))
+
+    @patch(REQUEST)
+    def test_rediscovery_keeps_choices_and_archives_missing_voices(self, request):
+        request.return_value = GATEWAY_VOICES
+        self.speech_provider.action_discover_voices()
+        alex = self.voices().filtered(lambda voice: voice.name == "em_alex")
+        self.company.ibt_speech_voice_es_id = alex
+        request.return_value = {"voices": [v for v in GATEWAY_VOICES["voices"] if v.get("id") != "ef_dora"]}
+        self.speech_provider.action_discover_voices()
+        self.assertEqual(self.company.ibt_speech_voice_es_id, alex)
+        self.assertFalse(self.voices().filtered(lambda voice: voice.name == "ef_dora").active)
+        request.return_value = {"voices": [v for v in GATEWAY_VOICES["voices"] if v.get("id") != "em_alex"]}
+        self.speech_provider.action_discover_voices()
+        # The chosen voice is gone: fall back to the default, which is offered again.
+        self.assertEqual(self.company.ibt_speech_voice_es_id.name, "ef_dora")
+        self.assertTrue(self.company.ibt_speech_voice_es_id.active)
+
+    @patch(REQUEST)
+    def test_voice_of_another_gateway_is_not_used(self, request):
+        request.return_value = GATEWAY_VOICES
+        self.speech_provider.action_discover_voices()
+        other = self.speech_provider.copy({"name": "Other gateway"})
+        other.action_discover_voices()
+        self.company.ibt_speech_voice_en_id = self.voices(other).filtered(lambda voice: voice.name == "am_michael")
+        self.assertEqual(self.company._ibt_speech_config()["voice_en"], "af_heart")
+
+    def test_no_voices_means_defaults(self):
+        config = self.company._ibt_speech_config()
+        self.assertEqual((config["voice_es"], config["voice_en"]), ("ef_dora", "af_heart"))
+
+    @patch(REQUEST)
+    def test_connection_test_refreshes_voices(self, request):
+        request.return_value = GATEWAY_VOICES
+        with patch.object(ProviderClient, "test_connection"):
+            result = self.speech_provider.action_test_connection()
+        self.assertEqual(result["params"]["type"], "success")
+        self.assertEqual(len(self.voices()), 4)
+        request.side_effect = gateway_error(403, "route_not_allowed")
+        with patch.object(ProviderClient, "test_connection"):
+            result = self.speech_provider.action_test_connection()
+        self.assertEqual(result["params"]["type"], "warning")
+
+    def test_discovery_only_for_speech_gateways(self):
         with self.assertRaises(ValidationError):
-            self.env.company.ibt_speech_voice_es = "Dora; drop"
+            self.chat_provider.action_discover_voices()
 
 
 @tagged("post_install", "-at_install")

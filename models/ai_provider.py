@@ -1,7 +1,10 @@
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
+from ..services import speech
 from ..services.client import ProviderClient, ProviderError, validate_endpoint
+
+DEFAULT_VOICES = {"es": "ef_dora", "other": "af_heart"}
 
 
 class IbtAiProvider(models.Model):
@@ -38,6 +41,7 @@ class IbtAiProvider(models.Model):
         help="Request 1536 dimensions from compatible embedding APIs. Disable when the API rejects this parameter.",
     )
     model_ids = fields.One2many("ibt.ai.provider.model", "provider_id", context={"active_test": False})
+    voice_ids = fields.One2many("ibt.ai.provider.voice", "provider_id", context={"active_test": False})
     note = fields.Text()
 
     @api.constrains("active", "base_url", "allow_private_network", "timeout", "provider_kind", "transport")
@@ -100,15 +104,74 @@ class IbtAiProvider(models.Model):
         self.ensure_one()
         chat_model = self.model_ids.filtered(lambda model: model.model_type == "chat")[:1]
         ProviderClient(self._snapshot(chat_model=chat_model)).test_connection()
+        message = self.env._("The AI provider is reachable.")
+        notification_type = "success"
+        if self.provider_kind == "speech_gateway":
+            # Keep the voice list current; voices need the key's tts route.
+            try:
+                result = self._ibt_sync_voices()
+                message += " " + self.env._("%(total)s voices available.", total=result["total"])
+            except ProviderError:
+                message += " " + self.env._(
+                    "Voices could not be loaded: the key needs the gateway's tts route for voice replies."
+                )
+                notification_type = "warning"
         return {
             "type": "ir.actions.client",
             "tag": "display_notification",
             "params": {
                 "title": self.env._("Connection successful"),
-                "message": self.env._("The AI provider is reachable."),
+                "message": message,
+                "type": notification_type,
+            },
+        }
+
+    def action_discover_voices(self):
+        self.ensure_one()
+        if self.provider_kind != "speech_gateway":
+            raise ValidationError(self.env._("Voices are available only for IBT Speech Gateway providers."))
+        result = self._ibt_sync_voices()
+        return {
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": self.env._("Speech gateway voices"),
+                "message": self.env._(
+                    "%(total)s voices: %(created)s added, %(archived)s no longer offered (archived).",
+                    **result,
+                ),
                 "type": "success",
             },
         }
+
+    def _ibt_sync_voices(self):
+        """Mirror the gateway's voices; pick the default voices for companies that have none."""
+        self.ensure_one()
+        offered = {voice["name"]: voice for voice in speech.list_voices(self._snapshot())}
+        Voice = self.env["ibt.ai.provider.voice"].with_context(active_test=False)
+        existing = {voice.name: voice for voice in Voice.search([("provider_id", "=", self.id)])}
+        created = 0
+        for name, values in offered.items():
+            values = dict(values, active=True)
+            if name in existing:
+                existing[name].write(values)
+            else:
+                Voice.create(dict(values, provider_id=self.id))
+                created += 1
+        gone = Voice.browse([voice.id for name, voice in existing.items() if name not in offered and voice.active])
+        gone.active = False
+        voices = Voice.search([("provider_id", "=", self.id), ("active", "=", True)])
+        by_name = {voice.name: voice for voice in voices}
+        spanish = voices.filtered(lambda voice: voice.language.startswith("es"))
+        for company in self.env["res.company"].sudo().search([("ibt_speech_provider_id", "=", self.id)]):
+            values = {}
+            if company.ibt_speech_voice_es_id not in spanish:
+                values["ibt_speech_voice_es_id"] = (by_name.get(DEFAULT_VOICES["es"]) or spanish[:1]).id
+            if company.ibt_speech_voice_en_id not in voices:
+                values["ibt_speech_voice_en_id"] = (by_name.get(DEFAULT_VOICES["other"]) or voices[:1]).id
+            if values:
+                company.write(values)
+        return {"total": len(offered), "created": created, "archived": len(gone)}
 
     def action_discover_models(self):
         self.ensure_one()
@@ -168,6 +231,31 @@ class IbtAiProvider(models.Model):
                 "sticky": bool(skipped),
             },
         }
+
+
+class IbtAiProviderVoice(models.Model):
+    _name = "ibt.ai.provider.voice"
+    _description = "IBT Speech Gateway Voice"
+    _order = "provider_id, language, name"
+    _rec_names_search = ["name", "language"]
+
+    name = fields.Char(string="Voice", required=True, readonly=True)
+    language = fields.Char(readonly=True, help="Language code reported by the gateway, e.g. es, en-us.")
+    gender = fields.Selection([("female", "Female"), ("male", "Male")], readonly=True)
+    active = fields.Boolean(default=True)
+    provider_id = fields.Many2one("ibt.ai.provider", required=True, ondelete="cascade", index=True)
+
+    _provider_name_unique = models.Constraint(
+        "UNIQUE(provider_id, name)",
+        "A voice is listed once per speech gateway.",
+    )
+
+    @api.depends("name", "language", "gender")
+    def _compute_display_name(self):
+        for voice in self:
+            details = ", ".join(filter(None, [voice.language, voice.gender and dict(
+                voice._fields["gender"]._description_selection(voice.env)).get(voice.gender)]))
+            voice.display_name = f"{voice.name} ({details})" if details else voice.name
 
 
 class IbtAiProviderModel(models.Model):

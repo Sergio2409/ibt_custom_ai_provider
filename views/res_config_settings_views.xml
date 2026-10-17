@@ -26,8 +26,9 @@
                             <div class="row mt16"><label for="ibt_speech_realtime" class="col-lg-4 o_light_label"/><field name="ibt_speech_realtime"/></div>
                             <div class="row mt16"><label for="ibt_speech_voice_replies" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_replies"/></div>
                             <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_mode" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_mode"/></div>
-                            <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_es" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_es" placeholder="ef_dora"/></div>
-                            <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_en" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_en" placeholder="af_heart"/></div>
+                            <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_es_id" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_es_id" options="{'no_create': True, 'no_open': True}" placeholder="ef_dora"/></div>
+                            <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_en_id" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_en_id" options="{'no_create': True, 'no_open': True}" placeholder="af_heart"/></div>
+                            <div class="mt8" invisible="not ibt_speech_voice_replies"><button name="action_ibt_discover_voices" type="object" string="Load voices from the gateway" class="btn-link" icon="oi-arrow-right"/></div>
                         </div>
                     </setting>
                 </block>

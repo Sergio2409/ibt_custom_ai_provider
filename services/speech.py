@@ -192,6 +192,22 @@ def speech_parts(text):
     return parts[:MAX_PARTS]
 
 
+def list_voices(config):
+    """Voices the gateway offers: [{"name", "language", "gender"}] (needs the key's tts route)."""
+    body = ProviderClient(config)._request("GET", "audio/voices")
+    voices = []
+    for voice in body.get("voices") or []:
+        name = voice.get("id") or voice.get("name")
+        if isinstance(name, str) and VOICE_RE.match(name):
+            gender = voice.get("gender")
+            voices.append({
+                "name": name,
+                "language": str(voice.get("language") or "")[:16],
+                "gender": gender if gender in ("female", "male") else False,
+            })
+    return voices
+
+
 def voice_for(config, lang_code):
     """The configured voice for an Odoo language (Spanish voice for es_*, else English)."""
     return config["voice_es"] if stt_language(lang_code) == "es" else config["voice_en"]

@@ -22,6 +22,8 @@
                     <button name="action_test_connection" type="object" string="Test Connection" class="btn-primary"/>
                     <button name="action_discover_models" type="object" string="Discover Models"
                             invisible="provider_kind != 'ollama'"/>
+                    <button name="action_discover_voices" type="object" string="Discover Voices"
+                            invisible="provider_kind != 'speech_gateway'"/>
                 </header>
                 <sheet>
                     <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger" invisible="active"/>
@@ -57,6 +59,16 @@
                                     <field name="supports_tools" optional="show"/>
                                     <field name="supports_vision" optional="hide"/>
                                     <field name="capabilities" optional="hide"/>
+                                    <field name="active" widget="boolean_toggle"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Voices" name="voices" invisible="provider_kind != 'speech_gateway'">
+                            <field name="voice_ids" readonly="1">
+                                <list create="0" delete="0" decoration-muted="not active">
+                                    <field name="name"/>
+                                    <field name="language"/>
+                                    <field name="gender"/>
                                     <field name="active" widget="boolean_toggle"/>
                                 </list>
                             </field>
