@@ -139,6 +139,12 @@ class TestIbtAiQueue(TransactionCase):
             self._run_cron()
         completions.assert_not_called()
 
+    def test_cancelled_request_is_not_sent(self):
+        self.session.loop_state = "ready"
+        with patch.object(ProviderClient, "completions") as completions:
+            self._run_cron()
+        completions.assert_not_called()
+
     def test_permanent_failure_fails_at_once(self):
         with patch.object(ProviderClient, "completions", side_effect=self._failure(401)), \
                 patch.object(type(self.session), "_finish_exchange") as finish:

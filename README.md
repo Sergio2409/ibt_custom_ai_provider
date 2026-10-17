@@ -73,6 +73,27 @@ Restrict provider administration to trusted users. This module deliberately bloc
 link-local and private destinations unless the provider explicitly allows
 private-network access; cloud endpoints should keep that option disabled.
 
+## Tests and CI
+
+The module supports Odoo 20 Enterprise only (it extends the `ai` module).
+`ci/run-tests.sh` starts a throwaway PostgreSQL 16 + pgvector container,
+installs the module on an empty database and runs its tests, then installs
+the released revision `FROM_REF`, stores a provider key, upgrades to the
+current checkout, runs the tests again, checks the key still works and
+uninstalls the module:
+
+    ODOO_SRC=~/src/odoo ENTERPRISE_SRC=~/src/enterprise PYTHON=~/venv/odoo20/bin/python \
+        FROM_REF=<released commit> ci/run-tests.sh
+
+The JS tests also need Chrome and `websocket-client` (on `PYTHONPATH`).
+Odoo Enterprise is private, so `.github/workflows/ci.yml` runs the script on
+a self-hosted GitHub runner labelled `odoo20` with those variables in the
+runner's `.env` file; pushes upgrade from the previous commit, pull requests
+from their base.
+
+The administrator procedure (setup, checks, keys, troubleshooting) is in
+[docs/SOP.md](docs/SOP.md).
+
 See [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for the prioritized work
 and release gates that remain before treating the module as production ready.
 

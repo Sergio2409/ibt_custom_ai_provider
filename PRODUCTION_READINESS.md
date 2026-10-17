@@ -112,6 +112,17 @@ schema.
 
 ### 5. Establish release-grade integration tests
 
+Done, trimmed (Odoo 20 Enterprise only; the module extends `ai`):
+`ci/run-tests.sh` installs on an empty PostgreSQL 16 + pgvector database,
+upgrades from a released revision with a stored key (checked afterwards),
+runs the suite both times and uninstalls; `.github/workflows/ci.yml` runs it
+on a self-hosted runner. Contract tests cover OpenAI, Anthropic and Ollama
+mappings including tool follow-up rounds, structured output, 401, 429, 502,
+503, 504, timeouts, oversized bodies, redirects and the queue (retries,
+expiry, cron budget, cancelled requests). Not covered: vLLM and
+llama.cpp fixtures (they use the OpenAI mapping), TLS failure and DNS
+rebinding tests, concurrent cron workers.
+
 - Add contract fixtures for OpenAI chat completions, Anthropic Messages,
   Ollama, vLLM and llama.cpp, including tool-result follow-up rounds.
 - Cover structured output, malformed/partial JSON, empty responses, usage
@@ -122,8 +133,8 @@ schema.
   changes, deleted users/companies/channels and transaction rollback isolation.
 - Add install, upgrade and uninstall tests on a database with `pgvector` already
   provisioned.
-- Run the module suite in CI against the supported Odoo 20 Community and
-  Enterprise revision used for deployment.
+- Run the module suite in CI against the Odoo 20 Enterprise revision used for
+  deployment.
 
 Acceptance: CI installs the module from a clean database, upgrades from the
 previous released version, and passes without real provider credentials.

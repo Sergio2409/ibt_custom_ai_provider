@@ -181,6 +181,12 @@ class TestProviderClientResilience(TransactionCase):
         with patch(SESSION_REQUEST, side_effect=responses):
             self.assertIn("Hello", str(self.client.completions([], "")))
 
+    def test_redirect_is_refused(self, sleep):
+        redirect = http_response(302, {}, {"Location": "http://169.254.169.254/latest/meta-data"})
+        with patch(SESSION_REQUEST, return_value=redirect) as request, self.assertRaisesRegex(ProviderError, "redirect"):
+            self.client._request("GET", "models")
+        self.assertEqual(request.call_count, 1)
+
     def test_response_size_is_capped(self, sleep):
         with patch.object(client_module, "MAX_BODY_BYTES", 10):
             for headers in ({"Content-Length": "11"}, {}):
