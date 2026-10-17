@@ -9,7 +9,7 @@ class ResUsersSettings(models.Model):
         help="Read answers to voice messages aloud in AI chats, when the company allows voice mode.",
     )
     ibt_voice_avatar = fields.Boolean(
-        string="Voice Avatar",
+        string="Voice Avatar", default=True,
         help="Show a talking avatar instead of the AI chat's messages; every answer is read aloud.",
     )
 

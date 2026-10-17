@@ -7,7 +7,7 @@ import { session } from "@web/session";
 /** How long voice mode waits for the agent's answer after a voice message. */
 export const VOICE_MODE_TIMEOUT_MS = 10 * 60 * 1000;
 /** Per-user switches (res.users.settings) and their value until the server sends one. */
-const USER_DEFAULTS = { ibt_voice_mode: true, ibt_voice_avatar: false };
+const USER_DEFAULTS = { ibt_voice_mode: true, ibt_voice_avatar: true };
 
 /**
  * Reads AI agent answers aloud with the company's speech gateway
@@ -38,9 +38,9 @@ export const voiceReplyService = {
             });
         }
 
-        /** The company allows voice mode and the user chose the talking avatar. */
+        /** Voice mode is on (company and user) and the user keeps the talking avatar. */
         function isAvatarOn() {
-            return Boolean(session.ibt_voice_mode && userSetting("ibt_voice_avatar"));
+            return Boolean(session.ibt_voice_mode && userSetting("ibt_voice_mode") && userSetting("ibt_voice_avatar"));
         }
 
         /** Measure the loudness of `element` while it plays (best effort, avatar only). */

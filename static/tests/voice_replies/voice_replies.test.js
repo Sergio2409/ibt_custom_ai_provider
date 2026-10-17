@@ -1,6 +1,17 @@
 import { createAIChat, defineAIModels } from "@ai/../tests/ai_test_helpers";
-import { click, contains, openDiscuss, start, startServer } from "@mail/../tests/mail_test_helpers";
-import { describe, expect, test } from "@odoo/hoot";
+import {
+    click,
+    contains,
+    mockGetMedia,
+    openDiscuss,
+    patchVoiceMessageAudio,
+    start,
+    startServer,
+} from "@mail/../tests/mail_test_helpers";
+import { Mp3Encoder } from "@mail/discuss/voice_message/common/mp3_encoder";
+import { loadLamejs } from "@mail/discuss/voice_message/common/voice_message_service";
+import { patchable } from "@mail/discuss/voice_message/common/voice_recorder";
+import { animationFrame, describe, expect, mockDate, test } from "@odoo/hoot";
 import { getService, onRpc, patchWithCleanup, serverState } from "@web/../tests/web_test_helpers";
 import { session } from "@web/session";
 
@@ -132,7 +143,7 @@ test("each user can switch voice mode off in the AI chat", async () => {
     expect.verifySteps([]);
 });
 
-test("voice avatar replaces the chat and shows when the answer is spoken", async () => {
+test("voice avatar is on by default, shows the spoken answer, and Show chat turns it off", async () => {
     patchWithCleanup(session, { ibt_voice_replies: true, ibt_voice_mode: true });
     const { channelId, answerId } = await setupAiChat();
     // The answer keeps playing until it is stopped.
@@ -149,9 +160,6 @@ test("voice avatar replaces the chat and shows when the answer is spoken", async
     });
     await start();
     await openDiscuss(channelId);
-    await click("button[title='More Actions']");
-    await click("button[name='ibt-voice-avatar']");
-    await expect.waitForSteps(['saved {"ibt_voice_avatar":true}']);
     await contains(".o-ibt-VoiceAvatar-face.o-idle");
     await contains(".o-mail-Message.o-ai-agent-response:not(:visible)");
 
@@ -166,4 +174,42 @@ test("voice avatar replaces the chat and shows when the answer is spoken", async
     await expect.waitForSteps(['saved {"ibt_voice_avatar":false}']);
     await contains(".o-ibt-VoiceAvatar", { count: 0 });
     await contains(".o-mail-Message.o-ai-agent-response");
+    await click("button[title='More Actions']");
+    await click("button[name='ibt-voice-avatar']");
+    await expect.waitForSteps(['saved {"ibt_voice_avatar":true}']);
+    await contains(".o-ibt-VoiceAvatar");
+});
+
+test("voice avatar: the second tap on the microphone sends the message", async () => {
+    patchWithCleanup(session, { ibt_voice_replies: true, ibt_voice_mode: true });
+    patchWithCleanup(Mp3Encoder.prototype, {
+        encode() {},
+        finish: () => [new Int8Array(16)],
+        clearBuffer() {},
+    });
+    patchWithCleanup(patchable, { makeFile: () => new File([new Uint8Array(2500)], "voice.mp3") });
+    mockGetMedia();
+    const audio = patchVoiceMessageAudio();
+    const { channelId } = await setupAiChat();
+    onRpc("/ai/transcription", () => {
+        expect.step("transcribe");
+        return { status: "success", text: "¿Cuántas facturas vencidas tengo?" };
+    });
+    onRpc("/ai/start_session_advance", () => {
+        expect.step("send");
+        return { loop_state: "waiting_model" };
+    });
+    await start();
+    await openDiscuss(channelId);
+    await loadLamejs();
+    mockDate("2026-10-17 10:00:00");
+    await click(".o-mail-Composer button[name='voice-start']");
+    await contains(".o-ibt-VoiceAvatar-face.o-listening");
+    mockDate("2026-10-17 10:00:03.500"); // a 3 s recording
+    audio.audioProcessor.process([[new Float32Array(128)]]);
+    await click(".o-mail-VoiceRecorder button.btn-primary");
+    await expect.waitForSteps(["transcribe", "send"]);
+    await animationFrame();
+    expect.verifySteps([]); // sent once
+    await contains(".o-ibt-VoiceAvatar-face.o-thinking");
 });

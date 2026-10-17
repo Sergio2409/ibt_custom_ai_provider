@@ -626,7 +626,7 @@ class TestVoiceReplyRoute(SpeechSetupMixin, HttpCase):
         self.authenticate("ibt-voice-http", "ibt-voice-http-pw")
         settings = self.env["res.users.settings"]._find_or_create_for_user(self.user)
         self.assertTrue(settings.ibt_voice_mode)
-        self.assertFalse(settings.ibt_voice_avatar)
+        self.assertTrue(settings.ibt_voice_avatar)
         self.make_jsonrpc_request("/web/dataset/call_kw/res.users.settings/set_res_users_settings", {
             "model": "res.users.settings", "method": "set_res_users_settings",
             "args": [[settings.id]], "kwargs": {"new_settings": {"ibt_voice_mode": False}},

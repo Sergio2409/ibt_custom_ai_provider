@@ -36,6 +36,11 @@ patch(Composer.prototype, {
                     } else if (this.ibtWasTranscribing) {
                         this.ibtWasTranscribing = false;
                         this.ibtVoiceDraft = true;
+                        // Voice Avatar: the second tap on the microphone also sends.
+                        // A send already in progress (Enter, Send) is not repeated.
+                        if (voiceReply.isAvatarOn() && this.props.composer.composerText.trim()) {
+                            this.sendMessage();
+                        }
                     }
                 },
                 { initialRun: false },
