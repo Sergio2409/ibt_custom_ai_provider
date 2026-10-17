@@ -70,13 +70,15 @@ class ResCompany(models.Model):
 
     @api.constrains("ibt_speech_enabled", "ibt_speech_provider_id")
     def _check_ibt_speech_settings(self):
+        # No "enabled requires a gateway" check here: the settings form writes
+        # its related fields one by one, so the switch arrives before the
+        # gateway. The form requires the gateway, and without one
+        # _ibt_speech_config() treats speech-to-text as disabled.
         for company in self:
             provider = company.ibt_speech_provider_id
             if provider and provider.provider_kind != "speech_gateway":
                 raise ValidationError(self.env._("The speech gateway must be a provider of kind IBT Speech Gateway."))
-            if company.ibt_speech_enabled and not provider:
-                raise ValidationError(self.env._("Select a speech gateway before enabling it."))
-            if company.ibt_speech_enabled and not provider.active:
+            if company.ibt_speech_enabled and provider and not provider.active:
                 raise ValidationError(self.env._("The selected speech gateway must be active."))
 
     @api.constrains(

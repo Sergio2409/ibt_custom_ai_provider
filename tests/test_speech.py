@@ -177,8 +177,23 @@ class TestSpeechConfig(SpeechSetupMixin, TransactionCase):
     def test_speech_provider_must_be_a_speech_gateway(self):
         with self.assertRaises(ValidationError):
             self.company.ibt_speech_provider_id = self.chat_provider
-        with self.assertRaises(ValidationError):
-            self.company.write({"ibt_speech_provider_id": False})
+
+    def test_enabled_without_gateway_means_disabled(self):
+        self.company.ibt_speech_provider_id = False
+        self.assertIsNone(self.company._ibt_speech_config())
+
+    def test_settings_page_saves_all_speech_fields_at_once(self):
+        # The settings form writes related fields one by one (the switch first).
+        self.company.write({"ibt_speech_enabled": False, "ibt_speech_provider_id": False})
+        self.env["res.config.settings"].create({
+            "ibt_speech_enabled": True,
+            "ibt_speech_provider_id": self.speech_provider.id,
+            "ibt_speech_correction": "format",
+            "ibt_speech_realtime": True,
+        }).execute()
+        config = self.company._ibt_speech_config()
+        self.assertEqual(config["base_url"], "https://speech.example.com/v1")
+        self.assertEqual((config["correction"], config["realtime"]), ("format", True))
 
     def test_speech_gateway_is_not_a_chat_provider(self):
         with self.assertRaises(ValidationError):
