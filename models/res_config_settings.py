@@ -83,7 +83,7 @@ class ResConfigSettings(models.TransientModel):
         companies = self.company_id
         previous = companies.ibt_ai_embedding_model_id
         result = super().set_values()
-        if previous != companies.ibt_ai_embedding_model_id:
+        if previous != companies.ibt_ai_embedding_model_id or self.env["ai.embedding"]._ibt_has_foreign_embedding_models():
             cron = self.env.ref("ai.ir_cron_update_deprecated_embedding_models", raise_if_not_found=False)
             if cron:
                 cron._trigger()
