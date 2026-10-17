@@ -100,6 +100,9 @@ def _json_error(response):
             return error.get("message") or json.dumps(error)
         return str(error)
     except (ValueError, TypeError):
+        # A proxy's HTML error page (e.g. 502 from Nginx) says nothing useful.
+        if "html" in response.headers.get("Content-Type", "") or response.text.lstrip().startswith("<"):
+            return response.reason
         return response.text
 
 
@@ -154,7 +157,14 @@ class ProviderClient:
             raise ProviderError(_("The AI provider attempted an HTTP redirect, which is blocked for security."))
         if not response.ok:
             detail = (_json_error(response) or response.reason)[:MAX_ERROR_LENGTH]
-            error = ProviderError(_("AI provider error %(status)s: %(detail)s", status=response.status_code, detail=detail))
+            if response.status_code in (502, 503, 504):
+                error = ProviderError(_(
+                    "The AI provider is not responding (HTTP %(status)s: %(detail)s). "
+                    "Check that the service is running and reachable from its proxy.",
+                    status=response.status_code, detail=detail,
+                ))
+            else:
+                error = ProviderError(_("AI provider error %(status)s: %(detail)s", status=response.status_code, detail=detail))
             error.status_code = response.status_code
             error.error_code = _json_error_code(response)
             raise error

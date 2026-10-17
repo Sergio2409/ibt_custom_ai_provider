@@ -5,7 +5,7 @@ import logging
 from werkzeug.exceptions import BadRequest
 
 from odoo import http
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 from odoo.http import request
 
 from odoo.addons.ai.controllers.ai import AIController
@@ -16,6 +16,12 @@ from ..services.client import ProviderError
 _logger = logging.getLogger(__name__)
 
 
+def check_employee():
+    """The speech gateway serves employees only, not portal users (customers)."""
+    if not request.env.user._is_internal():
+        raise AccessError(request.env._("Speech features are available to employees only."))
+
+
 class IbtSpeechAIController(AIController):
 
     @http.route()
@@ -24,6 +30,7 @@ class IbtSpeechAIController(AIController):
         config = request.env.company._ibt_speech_config()
         if not config:
             return super().transcribe(audio_base64, language=language)
+        check_employee()
         if not audio_base64:
             raise BadRequest("No audio data provided")
         try:
@@ -47,6 +54,7 @@ class IbtSpeechAIController(AIController):
         config = request.env.company._ibt_speech_config()
         if not config or not config["realtime"]:
             return super().get_session_token(language, prompt)
+        check_employee()
         try:
             session_token = speech.realtime_session(config, language=language, prompt=prompt)
         except ProviderError as error:

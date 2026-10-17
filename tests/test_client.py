@@ -57,6 +57,27 @@ class TestProviderClient(TransactionCase):
         self.assertEqual(request.kwargs["headers"]["Host"], "provider.example.com")
         self.assertFalse(session.trust_env)
 
+    @patch("odoo.addons.ibt_custom_ai_provider.services.client.requests.Session")
+    @patch("odoo.addons.ibt_custom_ai_provider.services.client.socket.getaddrinfo")
+    def test_proxy_error_page_becomes_a_clear_message(self, getaddrinfo, Session):
+        getaddrinfo.return_value = [(2, 1, 6, "", ("192.168.10.12", 443))]
+        response = MagicMock(ok=False, is_redirect=False, status_code=502, reason="Bad Gateway",
+                             headers={"Content-Type": "text/html"},
+                             text="<html><head><title>502 Bad Gateway</title></head></html>")
+        response.json.side_effect = ValueError
+        Session.return_value.__enter__.return_value.request.return_value = response
+        client = ProviderClient({
+            "transport": "openai",
+            "base_url": "https://speech.example.com/v1",
+            "allow_private_network": True,
+        })
+        with self.assertRaises(ProviderError) as ctx:
+            client.test_connection()
+        message = str(ctx.exception)
+        self.assertIn("not responding (HTTP 502: Bad Gateway)", message)
+        self.assertNotIn("<html>", message)
+        self.assertEqual(ctx.exception.status_code, 502)
+
     @patch.object(ProviderClient, "_request")
     def test_ollama_model_discovery(self, request):
         request.side_effect = [

@@ -230,6 +230,23 @@ class TestSpeechController(SpeechSetupMixin, HttpCase):
         super().setUp()
         self.authenticate("ibt-speech-http", "ibt-speech-http-pw")
 
+    @mute_logger("odoo.http")
+    @patch(REQUEST)
+    def test_portal_users_cannot_use_the_gateway(self, request):
+        new_test_user(self.env, login="ibt-speech-portal", password="ibt-speech-portal-pw",
+                      groups="base.group_portal", company_id=self.company.id)
+        self.company.write({"ibt_speech_realtime": True, "ibt_speech_voice_replies": True})
+        self.authenticate("ibt-speech-portal", "ibt-speech-portal-pw")
+        for route, params in (
+            ("/ai/transcription", {"audio_base64": base64.b64encode(AUDIO).decode()}),
+            ("/ai/transcription/session", {"language": "es", "prompt": ""}),
+            ("/ibt_ai/speech", {"message_id": 1}),
+        ):
+            with self.subTest(route=route), self.assertRaises(JsonRpcException) as ctx:
+                self.make_jsonrpc_request(route, params)
+            self.assertEqual(ctx.exception.args[0], "odoo.exceptions.AccessError")
+        request.assert_not_called()
+
     def transcribe(self, audio=AUDIO, language="es"):
         return self.make_jsonrpc_request("/ai/transcription", {
             "audio_base64": base64.b64encode(audio).decode() if isinstance(audio, bytes) else audio,

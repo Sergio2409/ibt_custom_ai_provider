@@ -9,6 +9,7 @@ from odoo.http import request
 
 from ..services import speech
 from ..services.client import ProviderError
+from .ai import check_employee
 
 _logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class IbtVoiceReplyController(http.Controller):
         config = request.env.company._ibt_speech_config()
         if not config or not config["voice_replies"]:
             raise NotFound()
+        check_employee()
         try:
             message_id, part = int(message_id), int(part)
         except (TypeError, ValueError):
