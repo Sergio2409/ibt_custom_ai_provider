@@ -35,6 +35,10 @@ class ResConfigSettings(models.TransientModel):
     ibt_speech_provider_id = fields.Many2one(related="company_id.ibt_speech_provider_id", readonly=False)
     ibt_speech_correction = fields.Selection(related="company_id.ibt_speech_correction", readonly=False)
     ibt_speech_realtime = fields.Boolean(related="company_id.ibt_speech_realtime", readonly=False)
+    ibt_speech_voice_replies = fields.Boolean(related="company_id.ibt_speech_voice_replies", readonly=False)
+    ibt_speech_voice_mode = fields.Boolean(related="company_id.ibt_speech_voice_mode", readonly=False)
+    ibt_speech_voice_es = fields.Char(related="company_id.ibt_speech_voice_es", readonly=False)
+    ibt_speech_voice_en = fields.Char(related="company_id.ibt_speech_voice_en", readonly=False)
 
     @api.onchange("ibt_ai_provider_id")
     def _onchange_ibt_ai_provider_id(self):

@@ -107,8 +107,11 @@ class ProviderClient:
     def __init__(self, config):
         self.config = config
 
-    def _request(self, method, path, payload=None, files=None, data=None):
-        """JSON request, or multipart/form-data when `files` is given."""
+    def _request(self, method, path, payload=None, files=None, data=None, raw=False):
+        """JSON request, or multipart/form-data when `files` is given.
+
+        raw=True returns the response body as bytes (e.g. generated audio).
+        """
         url = urljoin(self.config["base_url"].rstrip("/") + "/", path.lstrip("/"))
         parsed, addresses = _resolve_endpoint(url, self.config.get("allow_private_network", False))
         headers = {
@@ -155,6 +158,8 @@ class ProviderClient:
             error.status_code = response.status_code
             error.error_code = _json_error_code(response)
             raise error
+        if raw:
+            return response.content
         try:
             return response.json()
         except ValueError as error:

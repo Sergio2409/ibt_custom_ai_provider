@@ -24,6 +24,10 @@
                             <div class="row mt16"><label for="ibt_speech_provider_id" class="col-lg-4 o_light_label"/><field name="ibt_speech_provider_id" required="ibt_speech_enabled" options="{'no_quick_create': True}"/></div>
                             <div class="row mt16"><label for="ibt_speech_correction" class="col-lg-4 o_light_label"/><field name="ibt_speech_correction"/></div>
                             <div class="row mt16"><label for="ibt_speech_realtime" class="col-lg-4 o_light_label"/><field name="ibt_speech_realtime"/></div>
+                            <div class="row mt16"><label for="ibt_speech_voice_replies" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_replies"/></div>
+                            <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_mode" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_mode"/></div>
+                            <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_es" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_es" placeholder="ef_dora"/></div>
+                            <div class="row mt16" invisible="not ibt_speech_voice_replies"><label for="ibt_speech_voice_en" class="col-lg-4 o_light_label"/><field name="ibt_speech_voice_en" placeholder="af_heart"/></div>
                         </div>
                     </setting>
                 </block>

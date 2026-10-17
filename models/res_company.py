@@ -1,6 +1,8 @@
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
+from ..services import speech
+
 
 class ResCompany(models.Model):
     _inherit = "res.company"
@@ -21,6 +23,23 @@ class ResCompany(models.Model):
         help="Live transcription in the transcription widget through the speech gateway "
              "(needs the gateway's realtime route and this Odoo's address in its "
              "REALTIME_ALLOWED_ORIGINS). Off: the widget keeps using Odoo's IAP.",
+    )
+    ibt_speech_voice_replies = fields.Boolean(
+        string="Voice Replies",
+        help="A speaker button on AI agent answers reads them aloud with the speech gateway "
+             "(needs the gateway key's tts route). Nothing is stored.",
+    )
+    ibt_speech_voice_mode = fields.Boolean(
+        string="Voice Mode",
+        help="After a user sends a voice message in an AI chat, the agent's answer is read aloud automatically.",
+    )
+    ibt_speech_voice_es = fields.Char(
+        string="Spanish Voice", default="ef_dora",
+        help="Gateway voice for users whose language is Spanish, e.g. ef_dora (female), em_alex (male).",
+    )
+    ibt_speech_voice_en = fields.Char(
+        string="Other Languages Voice", default="af_heart",
+        help="Gateway voice for every other language, e.g. af_heart (female), am_michael (male).",
     )
     ibt_speech_correction = fields.Selection(
         [
@@ -66,7 +85,24 @@ class ResCompany(models.Model):
         provider = self.ibt_speech_provider_id.sudo()
         if not self.ibt_speech_enabled or not provider:
             return None
-        return dict(provider._snapshot(), correction=self.ibt_speech_correction, realtime=self.ibt_speech_realtime)
+        return dict(
+            provider._snapshot(),
+            correction=self.ibt_speech_correction,
+            realtime=self.ibt_speech_realtime,
+            voice_replies=self.ibt_speech_voice_replies,
+            voice_mode=self.ibt_speech_voice_replies and self.ibt_speech_voice_mode,
+            voice_es=self.ibt_speech_voice_es or "ef_dora",
+            voice_en=self.ibt_speech_voice_en or "af_heart",
+        )
+
+    @api.constrains("ibt_speech_voice_es", "ibt_speech_voice_en")
+    def _check_ibt_speech_voices(self):
+        for company in self:
+            for voice in (company.ibt_speech_voice_es, company.ibt_speech_voice_en):
+                if voice and not speech.VOICE_RE.match(voice):
+                    raise ValidationError(self.env._(
+                        "%s is not a voice name; use a gateway voice such as ef_dora or af_heart.", voice,
+                    ))
 
     @api.constrains("ibt_speech_enabled", "ibt_speech_provider_id")
     def _check_ibt_speech_settings(self):

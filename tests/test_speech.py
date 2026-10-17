@@ -2,6 +2,8 @@ import base64
 import json
 from unittest.mock import MagicMock, patch
 
+from markupsafe import Markup
+
 from odoo import Command
 from odoo.exceptions import AccessError, ValidationError
 from odoo.tests import tagged
@@ -431,3 +433,120 @@ class TestRealtimeClientPatch(HttpCase):
             login="ibt_hoot", timeout=600, success_signal="[HOOT] Test suite succeeded",
             error_checker=unit_test_error_checker,
         )
+
+
+class TestVoiceReplyText(TransactionCase):
+
+    def test_speech_text_drops_code_links_and_markup(self):
+        html = ("<p>**Tienes** tres facturas: <a href='https://odoo.example/x'>ver</a> https://odoo.example/y</p>"
+                "<pre><code>print('secret')</code></pre><ul><li># Factura 4512</li><li>`Factura 4513`</li></ul>")
+        text = speech.speech_text(html)
+        self.assertIn("Tienes tres facturas", text)
+        self.assertIn("Factura 4512", text)
+        for unwanted in ("print", "https://", "**", "#", "`"):
+            self.assertNotIn(unwanted, text)
+
+    def test_parts_start_short_and_stay_bounded(self):
+        sentence = "Esta es una frase de prueba con algunas palabras. "
+        parts = speech.speech_parts(sentence * 60)
+        self.assertLessEqual(len(parts[0]), speech.FIRST_PART_CHARS)
+        self.assertTrue(all(len(part) <= speech.PART_CHARS for part in parts))
+        self.assertEqual(" ".join(parts), (sentence * 60).strip())
+        long_sentence = "palabra, " * 200
+        self.assertTrue(all(len(part) <= speech.PART_CHARS for part in speech.speech_parts(long_sentence)))
+        self.assertLessEqual(len(speech.speech_parts(sentence * 2000)), speech.MAX_PARTS)
+        self.assertEqual(speech.speech_parts(""), [])
+
+    def test_voice_for_language(self):
+        config = {"voice_es": "em_alex", "voice_en": "am_michael"}
+        self.assertEqual(speech.voice_for(config, "es_MX"), "em_alex")
+        self.assertEqual(speech.voice_for(config, "en_US"), "am_michael")
+        self.assertEqual(speech.voice_for(config, "fr_FR"), "am_michael")
+
+    @patch(REQUEST)
+    def test_synthesize_asks_for_mp3(self, request):
+        request.return_value = b"ID3mp3"
+        self.assertEqual(speech.synthesize(CONFIG, "Hola", "ef_dora"), b"ID3mp3")
+        method, path, body = request.call_args.args
+        self.assertEqual((method, path), ("POST", "audio/speech"))
+        self.assertEqual(body, {"model": "tts-1", "voice": "ef_dora", "input": "Hola", "response_format": "mp3"})
+        self.assertTrue(request.call_args.kwargs["raw"])
+
+    def test_invalid_voice_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            self.env.company.ibt_speech_voice_es = "Dora; drop"
+
+
+@tagged("post_install", "-at_install")
+class TestVoiceReplyRoute(SpeechSetupMixin, HttpCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._create_speech_setup()
+        cls.company.write({"ibt_speech_voice_replies": True, "ibt_speech_voice_mode": True})
+        cls.user = new_test_user(cls.env, login="ibt-voice-http", password="ibt-voice-http-pw",
+                                 groups="base.group_user", company_id=cls.company.id, lang="en_US")
+        cls.other = new_test_user(cls.env, login="ibt-voice-other", password="ibt-voice-other-pw",
+                                  groups="base.group_user", company_id=cls.company.id)
+        Channel = cls.env["discuss.channel"]
+        cls.ai_chat = Channel.create({"name": "AI chat", "channel_type": "ai_chat"})
+        cls.ai_chat._add_members(users=cls.user)
+        cls.answer = cls.ai_chat.message_post(
+            body=Markup("<p>You have three overdue invoices. The oldest is from March.</p>"),
+            message_type="comment", subtype_xmlid="mail.mt_comment",
+        )
+        cls.group = Channel.create({"name": "Team", "channel_type": "channel"})
+        cls.group._add_members(users=cls.user)
+        cls.group_message = cls.group.message_post(body=Markup("<p>Hello team</p>"), message_type="comment",
+                                                   subtype_xmlid="mail.mt_comment")
+
+    def speak(self, message, part=0, login="ibt-voice-http"):
+        self.authenticate(login, f"{login}-pw")
+        return self.make_jsonrpc_request("/ibt_ai/speech", {"message_id": message.id, "part": part})
+
+    @patch(REQUEST)
+    def test_reads_an_ai_chat_answer(self, request):
+        request.return_value = b"ID3mp3"
+        result = self.speak(self.answer)
+        self.assertEqual((result["parts"], result["part"], result["mimetype"]), (1, 0, "audio/mpeg"))
+        self.assertEqual(base64.b64decode(result["audio"]), b"ID3mp3")
+        body = request.call_args.args[2]
+        self.assertEqual(body["voice"], "af_heart")
+        self.assertEqual(body["input"], "You have three overdue invoices. The oldest is from March.")
+
+    @patch(REQUEST)
+    def test_spanish_user_gets_the_spanish_voice(self, request):
+        self.env["res.lang"]._activate_lang("es_ES")
+        self.user.lang = "es_ES"
+        request.return_value = b"ID3mp3"
+        self.speak(self.answer)
+        self.assertEqual(request.call_args.args[2]["voice"], "ef_dora")
+
+    @mute_logger("odoo.http")
+    @patch(REQUEST)
+    def test_refused_messages(self, request):
+        for message, login in ((self.group_message, "ibt-voice-http"), (self.answer, "ibt-voice-other")):
+            with self.subTest(login=login, message=message.id), self.assertRaises(JsonRpcException):
+                self.speak(message, login=login)
+        with self.assertRaises(JsonRpcException):
+            self.speak(self.answer, part=5)
+        self.company.ibt_speech_voice_replies = False
+        with self.assertRaises(JsonRpcException):
+            self.speak(self.answer)
+        request.assert_not_called()
+
+    @mute_logger("odoo.http", "odoo.addons.ibt_custom_ai_provider.controllers.speech")
+    @patch(REQUEST)
+    def test_gateway_error_becomes_user_error(self, request):
+        request.side_effect = gateway_error(403, "route_not_allowed")
+        with self.assertRaises(JsonRpcException) as ctx:
+            self.speak(self.answer)
+        self.assertEqual(ctx.exception.args[0], "odoo.exceptions.UserError")
+
+    def test_session_carries_only_the_switches(self):
+        self.authenticate("ibt-voice-http", "ibt-voice-http-pw")
+        info = self.make_jsonrpc_request("/web/session/get_session_info", {})
+        self.assertTrue(info["ibt_voice_replies"])
+        self.assertTrue(info["ibt_voice_mode"])
+        self.assertNotIn("gateway-key", json.dumps(info))
