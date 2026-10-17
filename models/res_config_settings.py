@@ -1,34 +1,37 @@
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
+# Not related fields: a related field writes the company once per field, and
+# the company's cross-field checks then see half a configuration. get_values()
+# loads them and set_values() writes them together.
+IBT_AI_COMPANY_FIELDS = (
+    "ibt_ai_enabled", "ibt_ai_provider_id", "ibt_ai_chat_model_id",
+    "ibt_ai_reasoning_model_id", "ibt_ai_embedding_provider_id", "ibt_ai_embedding_model_id",
+)
+
 
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
 
-    ibt_ai_enabled = fields.Boolean(related="company_id.ibt_ai_enabled", readonly=False)
+    ibt_ai_enabled = fields.Boolean(string="Use IBT AI Provider")
     ibt_ai_provider_id = fields.Many2one(
-        related="company_id.ibt_ai_provider_id",
-        readonly=False,
+        "ibt.ai.provider", string="AI Provider",
         domain="[('provider_kind', '!=', 'speech_gateway')]",
     )
     ibt_ai_chat_model_id = fields.Many2one(
-        related="company_id.ibt_ai_chat_model_id",
-        readonly=False,
+        "ibt.ai.provider.model", string="Chat Model",
         domain="[('provider_id', '=', ibt_ai_provider_id), ('model_type', '=', 'chat')]",
     )
     ibt_ai_reasoning_model_id = fields.Many2one(
-        related="company_id.ibt_ai_reasoning_model_id",
-        readonly=False,
+        "ibt.ai.provider.model", string="Reasoning Model",
         domain="[('provider_id', '=', ibt_ai_provider_id), ('model_type', '=', 'chat')]",
     )
     ibt_ai_embedding_provider_id = fields.Many2one(
-        related="company_id.ibt_ai_embedding_provider_id",
-        readonly=False,
+        "ibt.ai.provider", string="Embedding Provider",
         domain="[('provider_kind', '!=', 'speech_gateway')]",
     )
     ibt_ai_embedding_model_id = fields.Many2one(
-        related="company_id.ibt_ai_embedding_model_id",
-        readonly=False,
+        "ibt.ai.provider.model", string="Embedding Model",
         domain="[('provider_id', '=', ibt_ai_embedding_provider_id), ('model_type', '=', 'embedding')]",
     )
 
@@ -48,6 +51,13 @@ class ResConfigSettings(models.TransientModel):
         readonly=False,
         domain="[('provider_id', '=', ibt_speech_provider_id)]",
     )
+
+    def get_values(self):
+        values = super().get_values()
+        company = self.env.company
+        values.update({fname: company[fname].id if fname.endswith("_id") else company[fname]
+                       for fname in IBT_AI_COMPANY_FIELDS})
+        return values
 
     @api.onchange("ibt_ai_provider_id")
     def _onchange_ibt_ai_provider_id(self):
@@ -83,6 +93,8 @@ class ResConfigSettings(models.TransientModel):
         companies = self.company_id
         previous = companies.ibt_ai_embedding_model_id
         result = super().set_values()
+        for settings in self:
+            settings.company_id.write({fname: settings[fname] for fname in IBT_AI_COMPANY_FIELDS})
         if previous != companies.ibt_ai_embedding_model_id or self.env["ai.embedding"]._ibt_has_foreign_embedding_models():
             cron = self.env.ref("ai.ir_cron_update_deprecated_embedding_models", raise_if_not_found=False)
             if cron:

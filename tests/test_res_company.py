@@ -88,6 +88,61 @@ class TestIbtAiCompanyConfig(TransactionCase):
             with self.env.cr.savepoint():
                 self.provider.active = False
 
+    def _save_settings(self, **values):
+        self.env["res.config.settings"].create(values).execute()
+
+    def test_settings_page_enables_provider_and_models_at_once(self):
+        self.company.write({field: False for field in (
+            "ibt_ai_enabled", "ibt_ai_provider_id", "ibt_ai_chat_model_id",
+            "ibt_ai_embedding_provider_id", "ibt_ai_embedding_model_id",
+        )})
+        self._save_settings(
+            ibt_ai_enabled=True,
+            ibt_ai_provider_id=self.provider.id,
+            ibt_ai_chat_model_id=self.chat_model.id,
+            ibt_ai_reasoning_model_id=self.chat_model.id,
+            ibt_ai_embedding_provider_id=self.provider.id,
+            ibt_ai_embedding_model_id=self.embedding_model.id,
+        )
+        self.assertEqual(self.company._ibt_ai_config()["chat_model"], "chat-model")
+        self.assertEqual(self.company._ibt_ai_embedding_config()["embedding_model"], "embedding-model")
+
+    def test_settings_page_switches_provider_and_models_at_once(self):
+        other = self.env["ibt.ai.provider"].create({
+            "name": "Other provider",
+            "base_url": "https://other.example.com/v1",
+            "model_ids": [
+                Command.create({"name": "other-chat", "model_type": "chat"}),
+                Command.create({"name": "other-embedding", "model_type": "embedding"}),
+            ],
+        })
+        other_chat = other.model_ids.filtered(lambda model: model.model_type == "chat")
+        other_embedding = other.model_ids.filtered(lambda model: model.model_type == "embedding")
+        self._save_settings(
+            ibt_ai_enabled=True,
+            ibt_ai_provider_id=other.id,
+            ibt_ai_chat_model_id=other_chat.id,
+            ibt_ai_embedding_provider_id=other.id,
+            ibt_ai_embedding_model_id=other_embedding.id,
+        )
+        self.assertEqual(self.company.ibt_ai_chat_model_id, other_chat)
+        self.assertEqual(self.company.ibt_ai_embedding_model_id, other_embedding)
+
+    def test_settings_page_keeps_values_it_does_not_send(self):
+        self._save_settings(ibt_ai_reasoning_model_id=self.chat_model.id)
+        self.assertEqual(self.company.ibt_ai_provider_id, self.provider)
+        self.assertEqual(self.company.ibt_ai_reasoning_model_id, self.chat_model)
+        self.assertEqual(self.company.ibt_ai_embedding_model_id, self.embedding_model)
+
+    def test_settings_page_still_rejects_a_foreign_model(self):
+        other = self.env["ibt.ai.provider"].create({
+            "name": "Other provider",
+            "base_url": "https://other.example.com/v1",
+        })
+        with self.assertRaisesRegex(ValidationError, "must belong to the selected chat provider"):
+            with self.env.cr.savepoint():
+                self._save_settings(ibt_ai_provider_id=other.id, ibt_ai_chat_model_id=self.chat_model.id)
+
     def test_selected_model_cannot_be_archived(self):
         with self.assertRaisesRegex(ValidationError, "cannot be archived"):
             with self.env.cr.savepoint():
