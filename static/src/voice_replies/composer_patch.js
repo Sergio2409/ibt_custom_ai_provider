@@ -1,6 +1,11 @@
 import { Composer } from "@mail/core/common/composer";
-// Load after the ai module's patch, which adds voice recording to AI chats.
+import { ComposerAction, registerComposerAction } from "@mail/core/common/composer_actions";
+// Load after the ai module's patches, which add voice recording and the AI toggles.
 import "@ai/discuss/composer_patch";
+import "@ai/discuss/composer_actions_patch";
+import { AiSessionToggle } from "@ai/components/ai_composer_actions_selectors/ai_session_toggle";
+import { _t } from "@web/core/l10n/translation";
+import { session } from "@web/session";
 import { useOnChange } from "@odoo/owl";
 import { patch } from "@web/core/utils/patch";
 
@@ -43,4 +48,32 @@ patch(Composer.prototype, {
         }
         return result;
     },
+});
+
+patch(ComposerAction.prototype, {
+    _getAiComposerActions() {
+        return [...super._getAiComposerActions(), "ibt-voice-mode"];
+    },
+});
+
+/** Each user switches voice mode for themselves, when the company allows it. */
+registerComposerAction("ibt-voice-mode", {
+    condition: ({ composer }) => composer.targetThread?.channel?.isAiChat && session.ibt_voice_mode,
+    closingModeAsDropdown: "none",
+    extraContentComponent: AiSessionToggle,
+    extraContentComponentProps: ({ store }) => ({
+        aiSession: { id: "ibt-voice-mode", config: store.self_user.res_users_settings_id },
+        configAttribute: "ibt_voice_mode",
+    }),
+    icon: "record_voice_over",
+    name: _t("Voice Mode"),
+    onSelected({ store }) {
+        const settings = store.self_user.res_users_settings_id;
+        settings.ibt_voice_mode = settings.ibt_voice_mode === false; // unset counts as on
+        store.env.services.orm.call("res.users.settings", "set_res_users_settings", [[settings.id]], {
+            new_settings: { ibt_voice_mode: settings.ibt_voice_mode },
+        });
+    },
+    sequence: 25,
+    sequenceGroup: 20,
 });

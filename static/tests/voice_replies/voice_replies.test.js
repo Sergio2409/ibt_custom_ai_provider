@@ -98,10 +98,33 @@ test("voice mode reads only a newer agent answer in the same chat", async () => 
     expect.verifySteps([]);
 });
 
-test("voice mode off: answers are not read automatically", async () => {
+test("voice mode not allowed by the company: no switch, no automatic reading", async () => {
     patchWithCleanup(session, { ibt_voice_replies: true, ibt_voice_mode: false });
     const { channelId } = await setupAiChat();
     await start();
+    await openDiscuss(channelId);
+    await click("button[title='More Actions']");
+    await contains("button[name='toggle-web-search']");
+    await contains("button[name='ibt-voice-mode']", { count: 0 });
+    const voiceReply = getService("ibt_voice_reply");
+    voiceReply.expectReply(channelId, 0);
+    voiceReply.onMessageShown({ id: 5, channel_id: { id: channelId }, aiIsAgentResponse: true });
+    expect.verifySteps([]);
+});
+
+test("each user can switch voice mode off in the AI chat", async () => {
+    patchWithCleanup(session, { ibt_voice_replies: true, ibt_voice_mode: true });
+    const { channelId } = await setupAiChat();
+    onRpc("res.users.settings", "set_res_users_settings", ({ kwargs }) => {
+        expect.step(`saved voice mode ${kwargs.new_settings.ibt_voice_mode}`);
+    });
+    await start();
+    await openDiscuss(channelId);
+    await click("button[title='More Actions']");
+    await click("button[name='ibt-voice-mode']");
+    await expect.waitForSteps(["saved voice mode false"]);
+    await contains("button[name='ibt-voice-mode'] input[type='checkbox']:not(:checked)");
+
     const voiceReply = getService("ibt_voice_reply");
     voiceReply.expectReply(channelId, 0);
     voiceReply.onMessageShown({ id: 5, channel_id: { id: channelId }, aiIsAgentResponse: true });

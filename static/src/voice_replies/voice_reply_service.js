@@ -13,8 +13,8 @@ export const VOICE_MODE_TIMEOUT_MS = 10 * 60 * 1000;
  * memory and released afterwards: nothing is stored.
  */
 export const voiceReplyService = {
-    dependencies: ["notification"],
-    start(env, { notification }) {
+    dependencies: ["mail.store", "notification"],
+    start(env, { "mail.store": store, notification }) {
         const state = proxy({ playingMessageId: null });
         /** channel id -> {afterMessageId, until}: voice mode is waiting for an answer */
         const pendingReplies = new Map();
@@ -93,7 +93,8 @@ export const voiceReplyService = {
 
         /** Voice mode: read the next agent answer in this chat aloud. */
         function expectReply(channelId, afterMessageId) {
-            if (session.ibt_voice_mode) {
+            // The company allows voice mode; the user may have switched it off.
+            if (session.ibt_voice_mode && store.self_user?.res_users_settings_id?.ibt_voice_mode !== false) {
                 pendingReplies.set(channelId, {
                     afterMessageId,
                     until: Date.now() + VOICE_MODE_TIMEOUT_MS,
