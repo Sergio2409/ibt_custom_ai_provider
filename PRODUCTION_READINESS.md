@@ -29,8 +29,9 @@ store.
 ### 2. Add resilient, bounded HTTP behavior
 
 Done, trimmed to the deployment: every request has one total
-deadline (the provider timeout, and the cron run's remaining time minus 30 s
-for queued requests); bodies are streamed and capped at 32 MiB; connection
+deadline (the provider timeout, and for queued requests the worker's real
+limit, `limit_time_real_cron` from the job's start, minus 30 s; Odoo's 120 s
+per-job slice only stops new requests from starting); bodies are streamed and capped at 32 MiB; connection
 failures and HTTP 429/502/503/504 are retried twice with backoff and jitter,
 honoring `Retry-After` within the deadline; completions are resent only after
 429/503 or a failed connection, never after a read timeout, 502 or 504.

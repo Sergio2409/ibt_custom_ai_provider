@@ -320,6 +320,10 @@ class ProviderClient:
         else:
             result = self._openai_completion(messages, instructions, tools, options)
         content = result["result"]["content"]
+        if not any(part.get("type") == "tool_call" or (part.get("text") or "").strip() for part in content):
+            # E.g. a thinking model that spent its answer on reasoning: Odoo
+            # would post an empty message. Asking again usually works.
+            raise _invalid(_transient(ProviderError(_("The AI model returned an empty answer."))))
         if options.get("schema") and not any(part.get("type") == "tool_call" for part in content):
             text = re.sub(r"^```(?:json)?\s*|\s*```$", "", "".join(part.get("text", "") for part in content).strip())
             try:

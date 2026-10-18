@@ -6,6 +6,7 @@ from unittest.mock import patch
 from odoo import Command, fields
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, new_test_user
+from odoo.tools import config
 
 from ..services.client import CapabilityError, ProviderClient, ProviderError
 
@@ -162,14 +163,18 @@ class TestIbtAiQueue(TransactionCase):
         self.assertEqual(finish.call_args.args, ("failed",))
 
     def test_cron_budget_bounds_the_request_and_the_batch(self):
-        answer = {"result": {"role": "assistant", "content": []}}
-        with patch.object(ProviderClient, "completions", autospec=True, return_value=answer) as completions, \
+        answer = {"result": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}
+        with patch.dict(config.options, {"limit_time_real_cron": 300}), \
+                patch.object(ProviderClient, "completions", autospec=True, return_value=answer) as completions, \
                 patch.object(type(self.session), "_continue_agent_loop"):
-            self._run_cron(budget=20)
+            # Odoo's 120 s slice for this job is used up: nothing new starts.
+            self._run_cron(budget=0)
             completions.assert_not_called()
-            self._run_cron(budget=200)
+            # 20 s into the job: the worker is stopped at 300 s, so the
+            # request may take 300 - 20 - 30 (delivery margin) = 250 s.
+            self._run_cron(budget=100)
         deadline = completions.call_args.args[0].config["deadline"]
-        self.assertLessEqual(deadline, time.monotonic() + 170)
+        self.assertAlmostEqual(deadline - time.monotonic(), 250, delta=5)
 
     def test_unsupported_request_tells_the_user_why(self):
         with patch.object(ProviderClient, "completions", side_effect=CapabilityError("The AI model x cannot handle images.")), \

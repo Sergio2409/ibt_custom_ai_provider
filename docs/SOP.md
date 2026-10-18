@@ -319,7 +319,7 @@ Start with **Test Connection** and the gateway log line for the key; the gateway
 
 | Date | Version | Change |
 | --- | --- | --- |
-| 2026-10-18 | 20.0.1.6.0 | Speech gateway calls in the request log (transcriptions with audio seconds, voice replies with characters, realtime sessions), gateway prices for cost estimates |
+| 2026-10-18 | 20.0.1.6.0 | Speech gateway calls in the request log (transcriptions with audio seconds, voice replies with characters, realtime sessions), gateway prices for cost estimates. Fixes: an empty model answer (e.g. a thinking model that only reasoned) is asked again instead of posted as an empty message; queued requests may run up to the provider timeout again (they were cut at 90 s) |
 | 2026-10-18 | 20.0.1.5.0 | Request log (90 days, no content), request queue view, provider last success/failure, model prices for cost estimates |
 | 2026-10-17 | 20.0.1.4.0 | Model capability flags (tools, images, PDF) checked before sending; PDF files sent to Anthropic and OpenAI-compatible APIs; structured answers validated |
 | 2026-10-17 | 20.0.1.3.0 | Queued requests retried after transient failures, failed after 10 minutes |

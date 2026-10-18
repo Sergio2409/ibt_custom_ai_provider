@@ -6,12 +6,15 @@ import uuid
 from datetime import timedelta
 
 from odoo import api, fields, models
+from odoo.tools import config
+
+from odoo.addons.base.models.ir_cron import MIN_TIME_PER_JOB
 
 from ..services.client import CapabilityError, ProviderClient, ProviderError
 
 _logger = logging.getLogger(__name__)
 BATCH_SIZE = 4
-# Seconds kept from the cron's time limit to deliver an answer and commit.
+# Seconds kept from the cron's real time limit to deliver an answer and commit.
 DELIVERY_MARGIN = 30
 # A request that keeps failing (or stopping the worker) fails visibly once it
 # has waited this long; transient failures are retried after 30 s, 60 s, ...
@@ -86,11 +89,17 @@ class AiSession(models.Model):
             "|", ("ibt_ai_next_attempt", "=", False), ("ibt_ai_next_attempt", "<=", fields.Datetime.now()),
         ]
         sessions = self.sudo().search(domain, order="write_date, id", limit=BATCH_SIZE)
-        cron_end = time.monotonic() + self.env["ir.cron"]._commit_progress(remaining=self.sudo().search_count(domain))
+        # _commit_progress() returns what is left of Odoo's per-job time slice
+        # (MIN_TIME_PER_JOB, 120 s): no new request starts after it. The
+        # worker is only stopped at limit_time_real_cron from the job's start,
+        # which bounds each request.
+        slice_end = time.monotonic() + self.env["ir.cron"]._commit_progress(remaining=self.sudo().search_count(domain))
+        limit = config["limit_time_real_cron"] if config["limit_time_real_cron"] >= 0 else config["limit_time_real"]
+        cron_end = slice_end - MIN_TIME_PER_JOB + limit if limit and slice_end != math.inf else math.inf
         for session in sessions:
             # A request that cannot finish before the cron is stopped waits
             # for the next run instead.
-            if cron_end - time.monotonic() <= DELIVERY_MARGIN:
+            if time.monotonic() >= slice_end or cron_end - time.monotonic() <= DELIVERY_MARGIN:
                 break
             self.env.cr.execute(
                 "SELECT pg_try_advisory_xact_lock(hashtext(%s), %s)",

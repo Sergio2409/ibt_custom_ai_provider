@@ -245,6 +245,17 @@ class TestModelCapabilities(TransactionCase):
             part = request.call_args.kwargs["json"]["messages"][-1]["content"][0]
             self.assertIn(part["type"], ("file", "document"))
 
+    def test_empty_answer_is_retried_later(self):
+        empty = {"choices": [{"message": {"content": "", "reasoning": "long thoughts"}, "finish_reason": "stop"}]}
+        with patch(SESSION_REQUEST, return_value=http_response(body=empty)), \
+                self.assertRaisesRegex(ProviderError, "empty answer") as ctx:
+            self._client().completions([], "")
+        self.assertEqual((ctx.exception.transient, ctx.exception.category), (True, "invalid_response"))
+        tool_only = {"choices": [{"message": {"content": "", "tool_calls": [
+            {"id": "c1", "function": {"name": "find", "arguments": "{}"}}]}}]}
+        with patch(SESSION_REQUEST, return_value=http_response(body=tool_only)):
+            self.assertEqual(self._client().completions([], "", [{"name": "find"}])["result"]["content"][-1]["type"], "tool_call")
+
     def test_structured_answer_is_validated(self):
         schema = {"type": "object", "properties": {"title": {"type": "string"}, "note": {"type": "string"}},
                   "required": ["title"], "additionalProperties": False}
