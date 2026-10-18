@@ -1,5 +1,6 @@
 import base64
 import logging
+import time
 
 from werkzeug.exceptions import BadRequest, NotFound
 
@@ -9,14 +10,14 @@ from odoo.http import request
 
 from ..services import speech
 from ..services.client import ProviderError
-from .ai import check_employee
+from .ai import check_employee, log_speech
 
 _logger = logging.getLogger(__name__)
 
 
 class IbtVoiceReplyController(http.Controller):
 
-    @http.route("/ibt_ai/speech", type="jsonrpc", auth="user", methods=["POST"], readonly=True)
+    @http.route("/ibt_ai/speech", type="jsonrpc", auth="user", methods=["POST"])
     def ibt_speech(self, message_id, part=0):
         """One part of an AI chat message read aloud by the speech gateway.
 
@@ -47,14 +48,17 @@ class IbtVoiceReplyController(http.Controller):
         if not 0 <= part < len(parts):
             raise BadRequest()
         voice = speech.voice_for(config, request.env.user.lang)
+        start = time.monotonic()
         try:
             audio = speech.synthesize(config, parts[part], voice)
         except ProviderError as error:
+            log_speech("speech", config, voice, start, error)
             _logger.warning(
                 "Speech gateway text-to-speech failed: HTTP %s, %s",
                 error.status_code or "-", error.error_code or "no response",
             )
             raise UserError(speech.user_message(request.env, error)) from error
+        log_speech("speech", config, voice, start, characters=len(parts[part]))
         return {
             "parts": len(parts),
             "part": part,

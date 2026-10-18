@@ -11,13 +11,20 @@ RETENTION = timedelta(days=90)
 
 
 class IbtAiRequestLog(models.Model):
-    """One row per chat or embedding call to a provider: metadata only, never
-    prompts, answers, attachments, keys or error texts."""
+    """One row per call to a provider (chat, embedding, speech gateway):
+    metadata only, never prompts, answers, audio, transcripts, keys or error
+    texts."""
     _name = "ibt.ai.request.log"
     _description = "IBT AI Request Log"
     _order = "id desc"
 
-    kind = fields.Selection([("chat", "Chat"), ("embedding", "Embedding")], required=True, readonly=True)
+    kind = fields.Selection([
+        ("chat", "Chat"),
+        ("embedding", "Embedding"),
+        ("transcription", "Transcription"),
+        ("speech", "Text-to-speech"),
+        ("realtime", "Realtime session"),
+    ], required=True, readonly=True)
     company_id = fields.Many2one("res.company", readonly=True, index=True)
     provider_id = fields.Many2one("ibt.ai.provider", readonly=True, index=True, ondelete="cascade")
     model_name = fields.Char(string="Model", readonly=True)
@@ -44,18 +51,23 @@ class IbtAiRequestLog(models.Model):
     duration = fields.Float(string="Duration (s)", digits=(16, 2), readonly=True, aggregator="avg")
     input_tokens = fields.Integer(readonly=True)
     output_tokens = fields.Integer(readonly=True)
+    audio_seconds = fields.Float(string="Audio (s)", digits=(16, 1), readonly=True)
+    characters = fields.Integer(readonly=True)
     estimated_cost = fields.Float(
-        string="Estimated Cost (USD)", digits=(16, 4), readonly=True,
+        string="Estimated Cost (USD)", digits=(16, 6), readonly=True,
         help="From the token counts and the model's prices; not an invoice.",
     )
 
     @api.model
     def _ibt_record(self, kind, provider, model_name, *, client=None, start=None, error=None,
-                    outcome=None, category=None, session=None, attempt=1):
+                    outcome=None, category=None, session=None, attempt=1, audio_seconds=0, characters=0,
+                    own_transaction=False):
         """Store one row and log it as one line. The row is part of the current
-        transaction (a caller that rolls back loses it); the line always stays
-        in the server log."""
+        transaction (a caller that rolls back loses it) unless own_transaction,
+        for HTTP routes that roll back on errors or are read-only; the line
+        always stays in the server log."""
         usage = (client and client.usage) or {}
+        audio_seconds = round(audio_seconds or 0, 1)  # as stored, so the cost matches it
         input_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
         output_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         model = provider.model_ids.filtered(lambda m: m.name == model_name and m.model_type == kind)[:1]
@@ -77,15 +89,23 @@ class IbtAiRequestLog(models.Model):
             "duration": time.monotonic() - start if start else 0,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "estimated_cost": (input_tokens * model.price_input + output_tokens * model.price_output) / 1e6,
+            "audio_seconds": audio_seconds,
+            "characters": characters,
+            "estimated_cost": (input_tokens * model.price_input + output_tokens * model.price_output) / 1e6
+                              + audio_seconds / 60 * provider.price_audio_minute
+                              + characters / 1e6 * provider.price_speech,
         }
         (_logger.info if values["outcome"] == "success" else _logger.warning)(
             "ibt_ai kind=%s request=%s company=%s provider=%s model=%s attempt=%s outcome=%s category=%s "
-            "status=%s duration=%.2fs tokens=%s/%s", kind, values["request_uuid"] or "-", values["company_id"],
+            "status=%s duration=%.2fs tokens=%s/%s audio=%.1fs characters=%s", kind, values["request_uuid"] or "-", values["company_id"],
             provider.id, model_name, attempt, values["outcome"], values["category"] or "-",
             values["status_code"] or "-", values["duration"], input_tokens, output_tokens,
+            values["audio_seconds"], characters,
         )
-        self.sudo().create(values)
+        if not own_transaction:
+            return self.sudo().create(values)
+        with self.env.registry.cursor() as cr:
+            self.with_env(self.env(cr=cr, su=True)).create(values)
 
     @api.autovacuum
     def _gc_old_rows(self):

@@ -55,6 +55,9 @@ class IbtAiProvider(models.Model):
     model_ids = fields.One2many("ibt.ai.provider.model", "provider_id", context={"active_test": False})
     voice_ids = fields.One2many("ibt.ai.provider.voice", "provider_id", context={"active_test": False})
     note = fields.Text()
+    # Speech gateway prices for the request log's cost estimate (0 = no cost).
+    price_audio_minute = fields.Float(string="Transcription Price (USD / audio minute)", digits=(16, 4))
+    price_speech = fields.Float(string="Text-to-speech Price (USD / 1M characters)", digits=(16, 4))
     last_success_at = fields.Datetime(string="Last Success", compute="_compute_ibt_health")
     last_failure_at = fields.Datetime(string="Last Failure", compute="_compute_ibt_health")
 

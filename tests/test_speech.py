@@ -29,7 +29,7 @@ CONFIG = {
 
 
 def gateway_answer(raw="hola señor", corrected=None, status="disabled", vtt=False):
-    raw_part = {"text": raw, "language": "es"}
+    raw_part = {"text": raw, "language": "es", "duration": 3.5}
     corrected_part = {"text": corrected} if corrected else None
     if vtt:
         raw_part["vtt"] = f"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n{raw}\n"
@@ -42,7 +42,13 @@ def gateway_error(status, code=None):
     error = ProviderError("AI provider error")
     error.status_code = status
     error.error_code = code
+    error.transient = status in (429, 502, 503, 504)
+    error.category = "unavailable" if error.transient else "configuration"
     return error
+
+
+def last_log(env, kind):
+    return env["ibt.ai.request.log"].search([("kind", "=", kind)], order="id desc", limit=1)
 
 
 class TestSpeechService(TransactionCase):
@@ -258,8 +264,12 @@ class TestSpeechController(SpeechSetupMixin, HttpCase):
     @patch(REQUEST)
     def test_voice_message_uses_the_gateway(self, request):
         request.return_value = gateway_answer(raw="hola, señor")
+        self.speech_provider.price_audio_minute = 0.006
         self.assertEqual(self.transcribe(), {"status": "success", "text": "hola, señor"})
         self.assertEqual(dict(request.call_args.kwargs["data"])["language"], "es")
+        row = last_log(self.env, "transcription")
+        self.assertEqual((row.outcome, row.audio_seconds, row.provider_id), ("success", 3.5, self.speech_provider))
+        self.assertAlmostEqual(row.estimated_cost, 3.5 / 60 * 0.006)
 
     @patch(REQUEST)
     def test_corrected_text_is_returned(self, request):
@@ -280,9 +290,14 @@ class TestSpeechController(SpeechSetupMixin, HttpCase):
     @patch(REQUEST)
     def test_gateway_errors_become_user_errors(self, request):
         request.side_effect = gateway_error(401, "invalid_api_key")
-        with self.assertRaises(JsonRpcException) as ctx:
+        # The row uses its own transaction to survive the rolled back request;
+        # in tests that transaction is nested in the test's, so check the line.
+        with self.assertRaises(JsonRpcException) as ctx, \
+                self.assertLogs("odoo.addons.ibt_custom_ai_provider.models.ai_request_log", "WARNING") as logs:
             self.transcribe()
         self.assertEqual(ctx.exception.args[0], "odoo.exceptions.UserError")
+        self.assertIn("kind=transcription", logs.output[0])
+        self.assertIn("outcome=failed category=configuration status=401", logs.output[0])
 
     @mute_logger("odoo.http")
     @patch(REQUEST)
@@ -333,6 +348,8 @@ class TestSpeechCallArtifact(SpeechSetupMixin, TransactionCase):
         self.assertEqual(request.call_args.kwargs["files"]["file"][2], "audio/webm")
         self.assertTrue(artifact._finalize_transcription(lease_until, result))
         self.assertEqual(artifact.transcription_state, "done")
+        self.assertEqual((last_log(self.env, "transcription").outcome, last_log(self.env, "transcription").audio_seconds),
+                         ("success", 3.5))
         self.assertIn("hola señor", artifact.transcript)
         self.assertFalse(artifact.ibt_transcript_raw)
 
@@ -351,8 +368,10 @@ class TestSpeechCallArtifact(SpeechSetupMixin, TransactionCase):
         request.side_effect = gateway_error(502)
         artifact, lease_until = self._pending_artifact()
         result = artifact._transcribe_claimed_record(lease_until)
-        self.assertEqual(result, {"status": "err"})
+        self.assertEqual(result["status"], "err")
         artifact._finalize_transcription(lease_until, result)
+        row = last_log(self.env, "transcription")
+        self.assertEqual((row.outcome, row.category, row.status_code), ("failed", "unavailable", 502))
         self.assertEqual(artifact.transcription_state, "pending")
         self.assertEqual(artifact.transcription_error_count, 1)
 
@@ -396,6 +415,7 @@ class TestRealtimeSession(SpeechSetupMixin, HttpCase):
 
         self.assertEqual(result["status"], "success")
         self.assertIsNone(result["iap_transaction_token"])
+        self.assertEqual(last_log(self.env, "realtime").outcome, "success")
         prefix, payload = self.decode(result["session_token"])
         self.assertEqual(prefix, "ibt")
         self.assertEqual(payload, {"url": "wss://speech.example.com/v1/realtime", "secret": "ek_secret"})
@@ -611,6 +631,9 @@ class TestVoiceReplyRoute(SpeechSetupMixin, HttpCase):
         body = request.call_args.args[2]
         self.assertEqual(body["voice"], "af_heart")
         self.assertEqual(body["input"], "You have three overdue invoices. The oldest is from March.")
+        row = last_log(self.env, "speech")
+        self.assertEqual((row.outcome, row.model_name, row.characters, row.user_id),
+                         ("success", "af_heart", len(body["input"]), self.user))
 
     @patch(REQUEST)
     def test_spanish_user_gets_the_spanish_voice(self, request):

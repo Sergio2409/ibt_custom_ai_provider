@@ -1,4 +1,5 @@
 import logging
+import time
 
 from odoo import fields, models
 
@@ -39,6 +40,8 @@ class MailCallArtifact(models.Model):
             return {"status": "no_media"}
         # Odoo 20 returns a lazily loaded BinaryValue, not bytes.
         audio = data.content if hasattr(data, "content") else data
+        # The request log row is written in phase 3 (_finalize_transcription).
+        log = {"provider_id": config["id"], "start": time.monotonic()}
         try:
             result = speech.transcribe(config, audio, self.media_id.mimetype, response_format="vtt")
         except ProviderError as error:
@@ -46,14 +49,18 @@ class MailCallArtifact(models.Model):
                 "Speech gateway transcription failed for call.artifact %s: HTTP %s, %s",
                 self.id, error.status_code or "-", error.error_code or "no response",
             )
-            return {"status": "err"}
+            return {"status": "err", "ibt_log": dict(log, error=error)}
         return {
+            "ibt_log": dict(log, audio_seconds=result["duration"]),
             "status": "ok",
             "transcript": result["vtt"],
             "ibt_transcript_raw": result["raw_vtt"] if result["corrected"] else False,
         }
 
     def _finalize_transcription(self, lease_until, result, max_retries=5):
+        if log := result.pop("ibt_log", None):
+            provider = self.env["ibt.ai.provider"].sudo().browse(log.pop("provider_id"))
+            self.env["ibt.ai.request.log"]._ibt_record("transcription", provider, "whisper-1", **log)
         finalized = super()._finalize_transcription(lease_until, result, max_retries=max_retries)
         if finalized and result.get("status") == "ok" and result.get("ibt_transcript_raw"):
             self.sudo().ibt_transcript_raw = result["ibt_transcript_raw"]

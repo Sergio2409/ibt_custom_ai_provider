@@ -23,6 +23,8 @@
                 <field name="duration"/>
                 <field name="input_tokens" sum="Total" optional="show"/>
                 <field name="output_tokens" sum="Total" optional="show"/>
+                <field name="audio_seconds" sum="Total" optional="show"/>
+                <field name="characters" sum="Total" optional="show"/>
                 <field name="estimated_cost" sum="Total" optional="hide"/>
             </list>
         </field>
@@ -47,6 +49,8 @@
                 <field name="duration" type="measure"/>
                 <field name="input_tokens" type="measure"/>
                 <field name="output_tokens" type="measure"/>
+                <field name="audio_seconds" type="measure"/>
+                <field name="characters" type="measure"/>
                 <field name="estimated_cost" type="measure"/>
             </pivot>
         </field>
@@ -65,6 +69,7 @@
                 <separator/>
                 <filter name="chat" string="Chat" domain="[('kind', '=', 'chat')]"/>
                 <filter name="embedding" string="Embeddings" domain="[('kind', '=', 'embedding')]"/>
+                <filter name="speech" string="Speech" domain="[('kind', 'in', ('transcription', 'speech', 'realtime'))]"/>
                 <separator/>
                 <filter name="since_yesterday" string="Since Yesterday"
                         domain="[('create_date', '>=', (context_today() - relativedelta(days=1)).strftime('%Y-%m-%d'))]"/>
@@ -74,6 +79,7 @@
                     <filter name="group_model" string="Model" context="{'group_by': 'model_name'}"/>
                     <filter name="group_company" string="Company" context="{'group_by': 'company_id'}"/>
                     <filter name="group_user" string="User" context="{'group_by': 'user_id'}"/>
+                    <filter name="group_kind" string="Kind" context="{'group_by': 'kind'}"/>
                     <filter name="group_category" string="Category" context="{'group_by': 'category'}"/>
                     <filter name="group_day" string="Day" context="{'group_by': 'create_date:day'}"/>
                 </group>
@@ -87,7 +93,7 @@
         <field name="context">{'search_default_since_yesterday': 1}</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">No AI requests in this period</p>
-            <p>Every chat and embedding call to a custom provider is listed here for 90 days, without its content.</p>
+            <p>Every chat, embedding and speech gateway call is listed here for 90 days, without its content.</p>
         </field>
     </record>
 

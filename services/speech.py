@@ -62,7 +62,7 @@ def transcribe(config, audio, mimetype, language=None, response_format="json"):
     :param str response_format: "json" (text only) or "vtt" (also cues)
     :return: dict with "text" (the corrected text if a correction was applied,
         else the raw one), "raw_text", "vtt" / "raw_vtt" (vtt format only),
-        "corrected" (bool) and "correction_status"
+        "corrected" (bool), "correction_status" and "duration" (audio seconds)
     :raises ProviderError: the gateway is unreachable or rejected the request;
         status_code / error_code tell why
     """
@@ -93,6 +93,7 @@ def transcribe(config, audio, mimetype, language=None, response_format="json"):
         "text": (corrected or raw).get("text") or "",
         "corrected": corrected is not None,
         "correction_status": body.get("correction_status"),
+        "duration": raw.get("duration") or 0,
     }
     if response_format == "vtt":
         result["raw_vtt"] = raw.get("vtt") or ""

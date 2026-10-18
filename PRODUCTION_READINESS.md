@@ -143,17 +143,19 @@ previous released version, and passes without real provider credentials.
 
 ### 6. Add observability and administrator diagnostics
 
-Done in 20.0.1.5.0, trimmed: `ibt.ai.request.log` keeps one row per chat or
-embedding call for 90 days (company, provider, model, user, agent, request,
+Done in 20.0.1.5.0 and 20.0.1.6.0, trimmed: `ibt.ai.request.log` keeps one row
+per chat, embedding or speech gateway call (transcription, text-to-speech,
+realtime session) for 90 days (company, provider, model, user, agent, request,
 round, attempt, outcome, category, HTTP status, provider request ID,
-duration, tokens, estimated cost from optional model prices), never prompts,
-answers, attachments, keys or error texts, readable by administrators only.
+duration, tokens, audio seconds, characters, estimated cost from optional
+model and gateway prices), never prompts, answers, audio, transcripts,
+attachments, keys or error texts, readable by administrators only.
 Each call is also one structured `ibt_ai ...` log line. Settings > Technical
 offers the request log (list, graph, pivot, filters) and the live request
 queue; providers show their last success and failure and a Requests button.
 Graphs and pivots can be added to an Odoo Dashboards spreadsheet. Not done:
 latency percentiles, a metrics endpoint, a content-logging diagnostic mode
-and speech calls (they keep their own log lines).
+and realtime session durations (only the gateway sees the audio).
 
 - Record redacted request diagnostics: provider, model, company, duration,
   outcome, retry count, provider request ID, token usage and error category.

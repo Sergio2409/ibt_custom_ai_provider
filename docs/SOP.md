@@ -1,10 +1,10 @@
 # SOP: IBT Custom AI Provider (Odoo 20)
 
-Updated 2026-10-18 for version 20.0.1.5.0 · owner: Sergio Valdes
+Updated 2026-10-18 for version 20.0.1.6.0 · owner: Sergio Valdes
 
 ## 1. Purpose and scope
 
-This SOP is how an Odoo administrator sets up, tests and maintains the **IBT Custom AI Provider** module (`ibt_custom_ai_provider`, version 20.0.1.5.0 or later) on Odoo 20 Enterprise. With it, Odoo's AI features run on providers the company chooses instead of Odoo's IAP service.
+This SOP is how an Odoo administrator sets up, tests and maintains the **IBT Custom AI Provider** module (`ibt_custom_ai_provider`, version 20.0.1.6.0 or later) on Odoo 20 Enterprise. With it, Odoo's AI features run on providers the company chooses instead of Odoo's IAP service.
 
 | Feature | What the module does | Where users see it |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ Two administrators are involved: the **Odoo administrator** configures Odoo, the
 
 Before you start, check:
 
-- [ ] Odoo 20 Enterprise with the `ai` module installed, and `ibt_custom_ai_provider` 20.0.1.5.0 or later in the addons path, and its master key (section 3).
+- [ ] Odoo 20 Enterprise with the `ai` module installed, and `ibt_custom_ai_provider` 20.0.1.6.0 or later in the addons path, and its master key (section 3).
 - [ ] For speech: the IBT Speech Gateway at `v2026.10.16-10` or later, reachable at `https://speech.ibt-homelab.cloud`.
 - [ ] The Odoo server resolves the gateway name to the proxy: `getent hosts speech.ibt-homelab.cloud` prints `192.168.10.12`. If not, use the Pi-hole as DNS or add an `/etc/hosts` line.
 - [ ] A gateway key for this Odoo, with the routes it needs: `stt` for speech-to-text, plus `realtime` for live dictation and `tts` for voice replies. Get it from the gateway administrator, delivered through a password manager, never by chat or e-mail.
@@ -110,7 +110,7 @@ How requests behave when a provider has trouble:
 **C. Watch requests** (also linked from **Settings → IBT AI Provider**: *Request log*, *Request queue*)
 
 - **Settings → Technical → IBT AI Request Queue**: requests waiting or retrying, oldest first, with their retries and next attempt.
-- **Settings → Technical → IBT AI Request Log**: one line per chat or embedding call for 90 days (provider, model, company, user, outcome, category, HTTP status, duration, tokens, estimated cost), never the content. Filter *Failed* or group by *Provider* or *Category* to find an outage; the graph and pivot views show volume and usage.
+- **Settings → Technical → IBT AI Request Log**: one line per chat, embedding or speech gateway call for 90 days (provider, model or voice, company, user, outcome, category, HTTP status, duration, tokens, audio seconds, characters, estimated cost), never the content. Filter *Speech* for transcriptions, voice replies and realtime sessions; realtime sessions are counted but not timed. Filter *Failed* or group by *Provider* or *Category* to find an outage; the graph and pivot views show volume and usage.
 - The provider form shows *Last Success*, *Last Failure* and a **Requests** button.
 - Dashboard: in the graph or pivot view, **Insert in spreadsheet** adds it to a dashboard in the **Dashboards** app.
 - Server log: each call is one line `ibt_ai kind=chat request=... outcome=... category=... status=... duration=...`, usable for log-based alerts.
@@ -133,6 +133,7 @@ With speech-to-text on, AI chat voice messages and Discuss call recordings are t
 | Allow private network | on |
 | Verify SSL | on |
 | Timeout (s) | 120 |
+| Transcription Price / Text-to-speech Price | optional, USD per audio minute and per million characters, for the request log's cost estimate; 0 = no cost (the gateway runs on the company GPU) |
 
 2. **Save → Test Connection** → *Connection successful*. The *Models* tab is hidden for this kind: a gateway needs no models.
 
@@ -318,6 +319,7 @@ Start with **Test Connection** and the gateway log line for the key; the gateway
 
 | Date | Version | Change |
 | --- | --- | --- |
+| 2026-10-18 | 20.0.1.6.0 | Speech gateway calls in the request log (transcriptions with audio seconds, voice replies with characters, realtime sessions), gateway prices for cost estimates |
 | 2026-10-18 | 20.0.1.5.0 | Request log (90 days, no content), request queue view, provider last success/failure, model prices for cost estimates |
 | 2026-10-17 | 20.0.1.4.0 | Model capability flags (tools, images, PDF) checked before sending; PDF files sent to Anthropic and OpenAI-compatible APIs; structured answers validated |
 | 2026-10-17 | 20.0.1.3.0 | Queued requests retried after transient failures, failed after 10 minutes |

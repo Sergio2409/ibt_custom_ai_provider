@@ -75,11 +75,14 @@ private-network access; cloud endpoints should keep that option disabled.
 
 ## Request log and queue
 
-**Settings > Technical > IBT AI Request Log** lists every chat and embedding
-call to a custom provider for 90 days: provider, model, company, user,
-outcome, error category, HTTP status, duration, tokens and an estimated cost
-(set input and output prices per million tokens on cloud models). Prompts,
-answers, attachments, keys and error texts are never stored. Graph and pivot
+**Settings > Technical > IBT AI Request Log** lists every chat, embedding and
+speech gateway call for 90 days: provider, model or voice, company, user,
+outcome, error category, HTTP status, duration, tokens, audio seconds,
+characters read aloud and an estimated cost (prices per million tokens on
+models; per audio minute and per million characters on the speech gateway).
+Realtime dictation sessions are counted, not timed: their audio goes straight
+from the browser to the gateway. Prompts, answers, audio, transcripts,
+attachments, keys and error texts are never stored. Graph and pivot
 views show volume, failures and usage; *Insert in spreadsheet* adds them to
 an Odoo Dashboards dashboard. **IBT AI Request Queue** shows the requests
 waiting or retrying, oldest first. Each call is also logged as one
