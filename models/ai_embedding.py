@@ -1,3 +1,5 @@
+import time
+
 from odoo import api, models
 from odoo.exceptions import UserError
 
@@ -59,4 +61,13 @@ class AiEmbedding(models.Model):
                 model,
             ))
         config = provider_model.provider_id._snapshot(embedding_model=provider_model)
-        return ProviderClient(config).embeddings(input, model=model)
+        client, start, error = ProviderClient(config), time.monotonic(), None
+        try:
+            return client.embeddings(input, model=model)
+        except Exception as failure:
+            error = failure
+            raise
+        finally:
+            self.env["ibt.ai.request.log"]._ibt_record(
+                "embedding", provider_model.provider_id, model, client=client, start=start, error=error,
+            )

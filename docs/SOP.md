@@ -1,10 +1,10 @@
 # SOP: IBT Custom AI Provider (Odoo 20)
 
-Updated 2026-10-17 for version 20.0.1.4.0 · owner: Sergio Valdes
+Updated 2026-10-18 for version 20.0.1.5.0 · owner: Sergio Valdes
 
 ## 1. Purpose and scope
 
-This SOP is how an Odoo administrator sets up, tests and maintains the **IBT Custom AI Provider** module (`ibt_custom_ai_provider`, version 20.0.1.4.0 or later) on Odoo 20 Enterprise. With it, Odoo's AI features run on providers the company chooses instead of Odoo's IAP service.
+This SOP is how an Odoo administrator sets up, tests and maintains the **IBT Custom AI Provider** module (`ibt_custom_ai_provider`, version 20.0.1.5.0 or later) on Odoo 20 Enterprise. With it, Odoo's AI features run on providers the company chooses instead of Odoo's IAP service.
 
 | Feature | What the module does | Where users see it |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ Two administrators are involved: the **Odoo administrator** configures Odoo, the
 
 Before you start, check:
 
-- [ ] Odoo 20 Enterprise with the `ai` module installed, and `ibt_custom_ai_provider` 20.0.1.4.0 or later in the addons path, and its master key (section 3).
+- [ ] Odoo 20 Enterprise with the `ai` module installed, and `ibt_custom_ai_provider` 20.0.1.5.0 or later in the addons path, and its master key (section 3).
 - [ ] For speech: the IBT Speech Gateway at `v2026.10.16-10` or later, reachable at `https://speech.ibt-homelab.cloud`.
 - [ ] The Odoo server resolves the gateway name to the proxy: `getent hosts speech.ibt-homelab.cloud` prints `192.168.10.12`. If not, use the Pi-hole as DNS or add an `/etc/hosts` line.
 - [ ] A gateway key for this Odoo, with the routes it needs: `stt` for speech-to-text, plus `realtime` for live dictation and `tts` for voice replies. Get it from the gateway administrator, delivered through a password manager, never by chat or e-mail.
@@ -89,7 +89,7 @@ Create one provider per AI service, list its models, then select the provider an
 | Timeout (s) | 120 | 120 | 120, more for slow reasoning models |
 
 3. **Models** tab: add each model ID with its type, *Chat* or *Embedding*. For Ollama, click **Discover Models** instead: it imports the installed models and their capabilities and never deletes models you added by hand.
-4. Check the capability columns of each chat model (show them from the list's optional columns): *Supports Tools*, *Supports Images*, *Supports PDF*. Discovery fills them for Ollama (PDF always off, Ollama cannot read PDF files) and refreshes them on every run; models added by hand start with all three on. Untick what an OpenAI-compatible server cannot do.
+4. Check the capability columns of each chat model (show them from the list's optional columns): *Supports Tools*, *Supports Images*, *Supports PDF*. Discovery fills them for Ollama (PDF always off, Ollama cannot read PDF files) and refreshes them on every run; models added by hand start with all three on. Untick what an OpenAI-compatible server cannot do. For cloud models, optionally fill *Input Price* and *Output Price* (USD per million tokens, from the provider's price list) so the request log can estimate costs; leave them at 0 for local models.
 5. Click **Test Connection** → *Connection successful*.
 
 Rules the module enforces: embedding models must return **1536 dimensions** (Odoo's storage size), an embedding model ID must be unique across providers, Anthropic cannot provide embeddings, and agents need a tool-capable chat model. A request that needs a capability the model lacks (tools, images, PDF files), any other file type, or more than 20 MB of attachments is refused before it is sent, and the user sees a message naming the model.
@@ -106,6 +106,14 @@ How requests behave when a provider has trouble:
 - If the provider is still unavailable, the request stays queued and is retried after 30 s, 60 s, 120 s and so on; the user keeps seeing the answer as pending.
 - A request still pending 10 minutes after it was sent fails with *The configured AI provider is temporarily unavailable*. A wrong key or model fails at once.
 - Each request has one deadline: the provider timeout, and never more than the time the background action has left (`limit_time_real_cron`); a request that cannot finish waits for the next run.
+
+**C. Watch requests** (also linked from **Settings → IBT AI Provider**: *Request log*, *Request queue*)
+
+- **Settings → Technical → IBT AI Request Queue**: requests waiting or retrying, oldest first, with their retries and next attempt.
+- **Settings → Technical → IBT AI Request Log**: one line per chat or embedding call for 90 days (provider, model, company, user, outcome, category, HTTP status, duration, tokens, estimated cost), never the content. Filter *Failed* or group by *Provider* or *Category* to find an outage; the graph and pivot views show volume and usage.
+- The provider form shows *Last Success*, *Last Failure* and a **Requests** button.
+- Dashboard: in the graph or pivot view, **Insert in spreadsheet** adds it to a dashboard in the **Dashboards** app.
+- Server log: each call is one line `ibt_ai kind=chat request=... outcome=... category=... status=... duration=...`, usable for log-based alerts.
 
 ## 5. Procedure 3: speech-to-text with the IBT Speech Gateway
 
@@ -292,7 +300,7 @@ Start with **Test Connection** and the gateway log line for the key; the gateway
 | Transcripts never corrected | Gateway correction not configured, or text already correct | Gateway log `correction_status`: `unavailable` = no correction URL, `ollama_error` = language model unreachable, `no_changes` = nothing to fix |
 | Call transcript missing, shows *File too large* | Recording above 24 MB | Shorter recordings; the limit is the gateway's upload size |
 | AI answers never arrive | The background action is inactive | **Settings → Technical → Scheduled Actions** → *AI: Process custom provider requests* active |
-| AI answer pending for minutes, then *temporarily unavailable* | The provider was unreachable or kept failing for 10 minutes | Server log lines *AI provider request ... failed* (each retry) and *gave up*; check the provider with **Test Connection** |
+| AI answer pending for minutes, then *temporarily unavailable* | The provider was unreachable or kept failing for 10 minutes | **IBT AI Request Log**, filter *Failed*: the category (*Unavailable*, *Throttled*, *Waited too long*) and HTTP status; check the provider with **Test Connection** |
 | *The AI model X cannot handle tools / images / PDF files* | The selected chat model lacks that capability | Choose another chat model in Settings, or tick the capability on the model if the server supports it |
 | *The AI provider returned an answer that does not match the requested structure* | The model ignored the JSON schema an Odoo feature asked for | Use a model with structured output support; retry the action |
 | No speaker button on agent answers | Voice Replies off, or the page still runs old code | Tick Voice Replies (section 8); Ctrl+F5 |
@@ -310,6 +318,7 @@ Start with **Test Connection** and the gateway log line for the key; the gateway
 
 | Date | Version | Change |
 | --- | --- | --- |
+| 2026-10-18 | 20.0.1.5.0 | Request log (90 days, no content), request queue view, provider last success/failure, model prices for cost estimates |
 | 2026-10-17 | 20.0.1.4.0 | Model capability flags (tools, images, PDF) checked before sending; PDF files sent to Anthropic and OpenAI-compatible APIs; structured answers validated |
 | 2026-10-17 | 20.0.1.3.0 | Queued requests retried after transient failures, failed after 10 minutes |
 | 2026-10-17 | 20.0.1.2.0 | Provider keys encrypted with a master key; Settings saves provider and models together; bounded, retried provider requests |

@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from odoo import Command, fields
+from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, new_test_user
 
 from ..services.client import CapabilityError, ProviderClient, ProviderError
@@ -124,6 +125,7 @@ class TestIbtAiQueue(TransactionCase):
         error = ProviderError("provider down")
         error.status_code = status
         error.transient = status == 503
+        error.category = {503: "unavailable", 429: "throttled"}.get(status, "configuration")
         return error
 
     def test_transient_failure_is_retried_on_a_later_run(self):
@@ -175,3 +177,67 @@ class TestIbtAiQueue(TransactionCase):
             self._run_cron()
         self.assertEqual(finish.call_args.kwargs["content"], "The AI model x cannot handle images.")
         self.assertEqual(self.session.ibt_ai_attempts, 0)
+
+    def _answer(self, client, *args, **kwargs):
+        client.usage, client.request_id = {"prompt_tokens": 1000, "completion_tokens": 500}, "req-42"
+        return {"result": {"role": "assistant", "content": []}}
+
+    def _rows(self):
+        return self.env["ibt.ai.request.log"].search([("request_uuid", "=", "queue-request")], order="id")
+
+    def test_request_log_records_each_attempt_without_content(self):
+        self.provider.model_ids.write({"price_input": 2.0, "price_output": 10.0})
+        with patch.object(ProviderClient, "completions", side_effect=self._failure(503)):
+            self._run_cron()
+        self.session.ibt_ai_next_attempt = False
+        with patch.object(ProviderClient, "completions", autospec=True, side_effect=self._answer), \
+                patch.object(type(self.session), "_continue_agent_loop"):
+            self._run_cron()
+        retry, success = self._rows()
+        self.assertEqual((retry.outcome, retry.category, retry.status_code, retry.attempt), ("retrying", "unavailable", 503, 1))
+        self.assertEqual((success.outcome, success.attempt, success.provider_request_id), ("success", 2, "req-42"))
+        self.assertEqual((success.input_tokens, success.output_tokens, success.estimated_cost), (1000, 500, 0.007))
+        self.assertEqual((success.company_id, success.user_id, success.model_name),
+                         (self.env.company, self.env.user, "chat-model"))
+        self.assertNotIn("provider down", str(retry.read()))
+        self.assertEqual(self.provider.last_success_at, success.create_date)
+
+    def test_request_log_records_failures_and_give_up(self):
+        with patch.object(ProviderClient, "completions", side_effect=self._failure(401)), \
+                patch.object(type(self.session), "_finish_exchange"):
+            self._run_cron()
+        self.assertEqual(self._rows().mapped("category"), ["configuration"])
+        self.session.write({"loop_state": "waiting_model", "ibt_ai_provider_id": self.provider.id,
+                            "ibt_ai_queued_at": fields.Datetime.now() - timedelta(minutes=11)})
+        with patch.object(type(self.session), "_finish_exchange"):
+            self._run_cron()
+        self.assertEqual(self._rows().mapped("category"), ["configuration", "expired"])
+        self.assertEqual(set(self._rows().mapped("outcome")), {"failed"})
+
+    def test_request_log_covers_embeddings(self):
+        model = self.env["ibt.ai.provider.model"].create({
+            "provider_id": self.provider.id, "name": "embed-model", "model_type": "embedding",
+        })
+        Embedding, Log = self.env["ai.embedding"], self.env["ibt.ai.request.log"]
+        with patch.object(ProviderClient, "embeddings", return_value=[[0.0] * 1536]):
+            Embedding._get_embeddings(["text"], model.name, "query")
+        self.assertEqual(Log.search([("kind", "=", "embedding")]).mapped("outcome"), ["success"])
+        # A caller that rolls back loses the failure's row, never its log line.
+        with patch.object(ProviderClient, "embeddings", side_effect=self._failure(429)), \
+                self.assertLogs("odoo.addons.ibt_custom_ai_provider.models.ai_request_log", "WARNING") as logs, \
+                self.assertRaises(ProviderError):
+            Embedding._get_embeddings(["text"], model.name, "query")
+        self.assertIn("kind=embedding", logs.output[0])
+        self.assertIn("outcome=failed category=throttled status=429", logs.output[0])
+
+    def test_request_log_is_for_administrators_and_kept_90_days(self):
+        Log = self.env["ibt.ai.request.log"]
+        old, recent = (Log.create({"kind": "chat", "provider_id": self.provider.id, "outcome": "success"}) for _ in range(2))
+        self.env.cr.execute("UPDATE ibt_ai_request_log SET create_date = now() - interval '91 days' WHERE id = %s", [old.id])
+        old.invalidate_recordset()
+        Log._gc_old_rows()
+        self.assertFalse(old.exists())
+        self.assertTrue(recent.exists())
+        user = new_test_user(self.env, login="ibt-log-user", groups="base.group_user")
+        with self.assertRaises(AccessError):
+            recent.with_user(user).read(["outcome"])

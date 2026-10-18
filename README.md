@@ -73,6 +73,18 @@ Restrict provider administration to trusted users. This module deliberately bloc
 link-local and private destinations unless the provider explicitly allows
 private-network access; cloud endpoints should keep that option disabled.
 
+## Request log and queue
+
+**Settings > Technical > IBT AI Request Log** lists every chat and embedding
+call to a custom provider for 90 days: provider, model, company, user,
+outcome, error category, HTTP status, duration, tokens and an estimated cost
+(set input and output prices per million tokens on cloud models). Prompts,
+answers, attachments, keys and error texts are never stored. Graph and pivot
+views show volume, failures and usage; *Insert in spreadsheet* adds them to
+an Odoo Dashboards dashboard. **IBT AI Request Queue** shows the requests
+waiting or retrying, oldest first. Each call is also logged as one
+`ibt_ai kind=... outcome=... category=...` line for log-based alerts.
+
 ## Tests and CI
 
 The module supports Odoo 20 Enterprise only (it extends the `ai` module).

@@ -1,6 +1,6 @@
 {
     "name": "IBT Custom AI Provider",
-    "version": "20.0.1.4.0",
+    "version": "20.0.1.5.0",
     "category": "Productivity/AI",
     "summary": "Use OpenAI, Anthropic, Ollama, or OpenAI-compatible AI providers, and your own speech gateway",
     "author": "IBT",
@@ -10,6 +10,7 @@
         "security/ir.access.csv",
         "data/ai_provider_data.xml",
         "data/ir_cron_data.xml",
+        "views/ai_request_log_views.xml",
         "views/ai_provider_views.xml",
         "views/res_config_settings_views.xml",
     ],

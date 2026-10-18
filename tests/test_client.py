@@ -158,9 +158,10 @@ class TestProviderClientResilience(TransactionCase):
 
     def test_retry_after_is_honored_and_retries_are_bounded(self, sleep):
         busy = [http_response(429, {"error": "busy"}, {"Retry-After": "7"}) for _ in range(3)]
-        with patch(SESSION_REQUEST, side_effect=busy) as request, self.assertRaises(ProviderError):
+        with patch(SESSION_REQUEST, side_effect=busy) as request, self.assertRaises(ProviderError) as ctx:
             self.client._request("GET", "models")
         self.assertEqual(request.call_count, 3)
+        self.assertEqual(ctx.exception.category, "throttled")
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [7.0, 7.0])
 
     def test_completion_is_not_resent_once_accepted(self, sleep):
@@ -176,10 +177,11 @@ class TestProviderClientResilience(TransactionCase):
         self.assertFalse(ctx.exception.transient)
 
     def test_completion_rejected_by_the_provider_is_resent(self, sleep):
-        answer = {"choices": [{"message": {"content": "Hello"}}]}
-        responses = [http_response(503, {"error": "loading model"}), http_response(body=answer)]
+        answer = {"choices": [{"message": {"content": "Hello"}}], "usage": {"prompt_tokens": 7, "completion_tokens": 2}}
+        responses = [http_response(503, {"error": "loading model"}), http_response(body=answer, headers={"x-request-id": "req-7"})]
         with patch(SESSION_REQUEST, side_effect=responses):
             self.assertIn("Hello", str(self.client.completions([], "")))
+        self.assertEqual((self.client.request_id, self.client.usage["prompt_tokens"]), ("req-7", 7))
 
     def test_redirect_is_refused(self, sleep):
         redirect = http_response(302, {}, {"Location": "http://169.254.169.254/latest/meta-data"})

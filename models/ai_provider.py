@@ -55,6 +55,19 @@ class IbtAiProvider(models.Model):
     model_ids = fields.One2many("ibt.ai.provider.model", "provider_id", context={"active_test": False})
     voice_ids = fields.One2many("ibt.ai.provider.voice", "provider_id", context={"active_test": False})
     note = fields.Text()
+    last_success_at = fields.Datetime(string="Last Success", compute="_compute_ibt_health")
+    last_failure_at = fields.Datetime(string="Last Failure", compute="_compute_ibt_health")
+
+    def _compute_ibt_health(self):
+        latest = {
+            (provider.id, outcome): date for provider, outcome, date in self.env["ibt.ai.request.log"]._read_group(
+                [("provider_id", "in", self._origin.ids), ("outcome", "!=", "retrying")],
+                ["provider_id", "outcome"], ["create_date:max"],
+            )
+        }
+        for provider in self:
+            provider.last_success_at = latest.get((provider._origin.id, "success"))
+            provider.last_failure_at = latest.get((provider._origin.id, "failed"))
 
     def init(self):
         super().init()
@@ -368,6 +381,9 @@ class IbtAiProviderModel(models.Model):
     supports_tools = fields.Boolean(default=True)
     supports_vision = fields.Boolean(string="Supports Images", default=True)
     supports_pdf = fields.Boolean(string="Supports PDF", default=True)
+    # Prices for the request log's cost estimate; 0 for local models.
+    price_input = fields.Float(string="Input Price (USD / 1M tokens)", digits=(16, 4))
+    price_output = fields.Float(string="Output Price (USD / 1M tokens)", digits=(16, 4))
 
     _provider_type_name_unique = models.Constraint(
         "UNIQUE(provider_id, model_type, name)",

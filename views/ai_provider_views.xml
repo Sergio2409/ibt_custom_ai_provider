@@ -26,6 +26,11 @@
                             invisible="provider_kind != 'speech_gateway'"/>
                 </header>
                 <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="%(action_ibt_ai_request_log)d" type="action" class="oe_stat_button" icon="fa-list"
+                                string="Requests" context="{'search_default_provider_id': id}"
+                                invisible="provider_kind == 'speech_gateway'"/>
+                    </div>
                     <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger" invisible="active"/>
                     <div class="oe_title"><label for="name"/><h1><field name="name"/></h1></div>
                     <group>
@@ -49,6 +54,8 @@
                             <field name="allow_private_network"/>
                             <field name="verify_ssl"/>
                             <field name="timeout"/>
+                            <field name="last_success_at" invisible="provider_kind == 'speech_gateway'"/>
+                            <field name="last_failure_at" invisible="provider_kind == 'speech_gateway'"/>
                             <field name="send_embedding_dimensions" invisible="provider_kind == 'speech_gateway'"/>
                             <field name="active" invisible="1"/>
                         </group>
@@ -66,6 +73,8 @@
                                     <field name="supports_vision" optional="hide"/>
                                     <field name="supports_pdf" optional="hide"/>
                                     <field name="capabilities" optional="hide"/>
+                                    <field name="price_input" optional="hide"/>
+                                    <field name="price_output" optional="hide"/>
                                     <field name="active" widget="boolean_toggle"/>
                                 </list>
                             </field>

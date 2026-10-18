@@ -1,4 +1,5 @@
 from . import ai_provider
+from . import ai_request_log
 from . import ai_session
 from . import ai_embedding
 from . import ir_http

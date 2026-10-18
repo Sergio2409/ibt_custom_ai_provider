@@ -129,29 +129,38 @@ class AiSession(models.Model):
                 {"kind": "failure", "code": "provider_configuration_changed"},
                 "The AI provider configuration changed while this request was queued. Please try again.",
             )
+        Log = self.env["ibt.ai.request.log"]
+        log = dict(provider=self.ibt_ai_provider_id, model_name=config["chat_model"], session=self,
+                   attempt=self.ibt_ai_attempts + 1)
         if self.ibt_ai_queued_at and self.ibt_ai_queued_at < fields.Datetime.now() - MAX_QUEUE_WAIT:
             _logger.warning("AI provider request %s gave up: queued since %s, %s retries",
                             self.request_uuid, self.ibt_ai_queued_at, self.ibt_ai_attempts)
+            Log._ibt_record("chat", **log, outcome="failed", category="expired")
             return self._deliver_ibt_ai_result({"kind": "failure", "code": "provider_request_failed"})
         options = {key: value for key, value in payload.items() if key not in ("messages", "instructions", "tools")}
         config["deadline"] = deadline
+        client, start = ProviderClient(config), time.monotonic()
         try:
-            result = ProviderClient(config).completions(
+            result = client.completions(
                 payload["messages"], payload.get("instructions", ""), payload.get("tools"), **options,
             )
+            Log._ibt_record("chat", **log, client=client, start=start)
             completion_result = {"kind": "success", "message": result["result"]}
             error_message = None
         except ProviderError as error:
             _logger.warning("AI provider request %s failed: %s", self.request_uuid, error)
             if error.transient:
+                Log._ibt_record("chat", **log, client=client, start=start, error=error, outcome="retrying")
                 next_attempt = fields.Datetime.now() + RETRY_DELAY * 2 ** self.ibt_ai_attempts
                 self.write({"ibt_ai_attempts": self.ibt_ai_attempts + 1, "ibt_ai_next_attempt": next_attempt})
                 return self.env.ref("ibt_custom_ai_provider.ir_cron_ibt_ai_requests")._trigger(next_attempt)
+            Log._ibt_record("chat", **log, client=client, start=start, error=error)
             code = "unsupported_request" if isinstance(error, CapabilityError) else "provider_request_failed"
             completion_result = {"kind": "failure", "code": code}
             error_message = str(error)
-        except Exception:
+        except Exception as error:
             _logger.exception("Unexpected AI provider failure for request %s", self.request_uuid)
+            Log._ibt_record("chat", **log, client=client, start=start, error=error)
             completion_result = {"kind": "failure", "code": "provider_request_failed"}
             error_message = "The AI provider request failed unexpectedly. Check the server log."
         return self._deliver_ibt_ai_result(completion_result, error_message)

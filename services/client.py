@@ -39,14 +39,24 @@ class ProviderError(UserError):
     retryable = False
     # Network, time or 429/5xx failure that may succeed later (queue retry).
     transient = False
+    # For the request log: configuration, capability, throttled, unavailable
+    # or invalid_response.
+    category = "configuration"
 
 
 class CapabilityError(ProviderError):
     """The selected model cannot handle this request; shown to the user as is."""
+    category = "capability"
 
 
 def _transient(error):
     error.transient = True
+    error.category = "unavailable"
+    return error
+
+
+def _invalid(error):
+    error.category = "invalid_response"
     return error
 
 
@@ -115,13 +125,13 @@ def _read_body(response, deadline):
     """Load the streamed body into the response, bounded in size and time."""
     length = response.headers.get("Content-Length") or ""
     if length.isdigit() and int(length) > MAX_BODY_BYTES:
-        raise ProviderError(_("The AI provider response is too large."))
+        raise _invalid(ProviderError(_("The AI provider response is too large.")))
     body = bytearray()
     try:
         for chunk in response.iter_content(64 * 1024):
             body += chunk
             if len(body) > MAX_BODY_BYTES:
-                raise ProviderError(_("The AI provider response is too large."))
+                raise _invalid(ProviderError(_("The AI provider response is too large.")))
             if time.monotonic() > deadline:
                 raise _transient(ProviderError(_("The AI provider did not answer in time.")))
     except requests.RequestException as error:
@@ -154,6 +164,8 @@ def _json_error(response):
 class ProviderClient:
     def __init__(self, config):
         self.config = config
+        # From the last successful response, for the request log.
+        self.request_id = self.usage = None
 
     def _request(self, method, path, payload=None, files=None, data=None, raw=False, idempotent=True):
         """JSON request, or multipart/form-data when `files` is given.
@@ -244,13 +256,17 @@ class ProviderClient:
             error.error_code = _json_error_code(response)
             error.retry_after = response.headers.get("Retry-After")
             error.transient = response.status_code in RETRY_STATUSES
+            error.category = "throttled" if response.status_code == 429 else "unavailable" if error.transient else "configuration"
             raise error
+        self.request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
         if raw:
             return response.content
         try:
-            return response.json()
+            body = response.json()
+            self.usage = body.get("usage") if isinstance(body, dict) else None
+            return body
         except ValueError as error:
-            raise ProviderError(_("The AI provider returned an invalid JSON response.")) from error
+            raise _invalid(ProviderError(_("The AI provider returned an invalid JSON response."))) from error
 
     def test_connection(self):
         if self.config["transport"] == "anthropic":
@@ -311,7 +327,7 @@ class ProviderClient:
             except ValueError:
                 valid = False
             if not valid:
-                raise ProviderError(_("The AI provider returned an answer that does not match the requested structure."))
+                raise _invalid(ProviderError(_("The AI provider returned an answer that does not match the requested structure.")))
             result["result"]["content"] = [{"type": "text", "text": text}]
         return result
 
@@ -348,7 +364,7 @@ class ProviderClient:
         rows = sorted(data.get("data", []), key=lambda row: row.get("index", 0))
         vectors = [row.get("embedding", []) for row in rows]
         if len(vectors) != len(texts) or any(len(vector) != EMBEDDING_DIMENSIONS for vector in vectors):
-            raise ProviderError(_("The provider must return one 1536-dimensional embedding for each input."))
+            raise _invalid(ProviderError(_("The provider must return one 1536-dimensional embedding for each input.")))
         return {"embeddings": vectors}
 
     def _openai_completion(self, messages, instructions, tools, options):
@@ -373,7 +389,7 @@ class ProviderClient:
         data = self._request("POST", "chat/completions", payload, idempotent=False)
         choices = data.get("choices") or []
         if not choices:
-            raise ProviderError(_("The AI provider returned no completion."))
+            raise _invalid(ProviderError(_("The AI provider returned no completion.")))
         message = choices[0].get("message") or {}
         content = []
         text = message.get("content")
@@ -386,7 +402,7 @@ class ProviderClient:
             try:
                 arguments = json.loads(function.get("arguments") or "{}")
             except (json.JSONDecodeError, TypeError) as error:
-                raise ProviderError(_("The provider returned invalid tool arguments.")) from error
+                raise _invalid(ProviderError(_("The provider returned invalid tool arguments."))) from error
             content.append({"type": "tool_call", "name": function.get("name"), "args": arguments, "call_id": call.get("id")})
         return _odoo_result(content, data.get("model"), data.get("usage"), "openai")
 

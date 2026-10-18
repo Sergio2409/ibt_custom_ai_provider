@@ -16,6 +16,8 @@
                             <div class="row mt16"><label for="ibt_ai_embedding_provider_id" class="col-lg-4 o_light_label"/><field name="ibt_ai_embedding_provider_id" options="{'no_quick_create': True}"/></div>
                             <div class="row mt16"><label for="ibt_ai_embedding_model_id" class="col-lg-4 o_light_label"/><field name="ibt_ai_embedding_model_id" options="{'no_quick_create': True}" invisible="not ibt_ai_embedding_provider_id"/></div>
                             <div class="mt16"><button name="%(action_ibt_ai_provider)d" type="action" string="Manage providers and models" class="btn-link" icon="oi-arrow-right"/></div>
+                            <div><button name="%(action_ibt_ai_request_log)d" type="action" string="Request log" class="btn-link" icon="oi-arrow-right"/></div>
+                            <div><button name="%(action_ibt_ai_request_queue)d" type="action" string="Request queue" class="btn-link" icon="oi-arrow-right"/></div>
                         </div>
                     </setting>
                     <setting string="Speech-to-text" help="Transcribe AI chat voice messages and call recordings with your IBT Speech Gateway instead of Odoo's IAP service.">
