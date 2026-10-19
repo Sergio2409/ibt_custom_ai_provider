@@ -3,6 +3,8 @@ import time
 from datetime import timedelta
 from unittest.mock import patch
 
+import psycopg2
+
 from odoo import Command, fields
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, new_test_user
@@ -147,6 +149,14 @@ class TestIbtAiQueue(TransactionCase):
         with patch.object(ProviderClient, "completions") as completions:
             self._run_cron()
         completions.assert_not_called()
+
+    def test_concurrent_update_leaves_the_request_queued(self):
+        conflict = psycopg2.errors.SerializationFailure("could not serialize access due to concurrent update")
+        with patch.object(type(self.session), "_process_ibt_ai_request", side_effect=conflict), \
+                patch.object(type(self.session), "_finish_exchange") as finish:
+            self._run_cron()
+        finish.assert_not_called()
+        self.assertEqual((self.session.loop_state, self.session.ibt_ai_provider_id), ("waiting_model", self.provider))
 
     def test_permanent_failure_fails_at_once(self):
         with patch.object(ProviderClient, "completions", side_effect=self._failure(401)), \

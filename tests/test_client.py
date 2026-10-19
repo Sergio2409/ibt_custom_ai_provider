@@ -176,6 +176,16 @@ class TestProviderClientResilience(TransactionCase):
             self.client.completions([], "")
         self.assertFalse(ctx.exception.transient)
 
+    def test_unreadable_answer_is_asked_again_at_once(self, sleep):
+        unreadable = [http_response(500, {"error": "error parsing tool call"}) for _ in range(3)]
+        answer = {"choices": [{"message": {"content": "Done"}}]}
+        with patch(SESSION_REQUEST, side_effect=[unreadable[0], http_response(body=answer)]) as request:
+            self.assertIn("Done", str(self.client.completions([], "")))
+        self.assertEqual((request.call_count, sleep.call_count), (2, 0))
+        with patch(SESSION_REQUEST, side_effect=unreadable) as request, self.assertRaises(ProviderError) as ctx:
+            self.client.completions([], "")
+        self.assertEqual((request.call_count, ctx.exception.status_code, ctx.exception.transient), (3, 500, True))
+
     def test_completion_rejected_by_the_provider_is_resent(self, sleep):
         answer = {"choices": [{"message": {"content": "Hello"}}], "usage": {"prompt_tokens": 7, "completion_tokens": 2}}
         responses = [http_response(503, {"error": "loading model"}), http_response(body=answer, headers={"x-request-id": "req-7"})]
@@ -245,12 +255,16 @@ class TestModelCapabilities(TransactionCase):
             part = request.call_args.kwargs["json"]["messages"][-1]["content"][0]
             self.assertIn(part["type"], ("file", "document"))
 
-    def test_empty_answer_is_retried_later(self):
+    def test_empty_answer_is_asked_again_then_reported(self):
         empty = {"choices": [{"message": {"content": "", "reasoning": "long thoughts"}, "finish_reason": "stop"}]}
-        with patch(SESSION_REQUEST, return_value=http_response(body=empty)), \
-                self.assertRaisesRegex(ProviderError, "empty answer") as ctx:
+        answer = {"choices": [{"message": {"content": "Done"}}]}
+        with patch(SESSION_REQUEST, side_effect=[http_response(body=empty), http_response(body=answer)]) as request:
+            self.assertIn("Done", str(self._client().completions([], "")))
+        self.assertEqual(request.call_count, 2)
+        with patch(SESSION_REQUEST, side_effect=[http_response(body=empty) for _ in range(3)]) as request, \
+                self.assertRaisesRegex(client_module.CapabilityError, "small-model returned no answer") as ctx:
             self._client().completions([], "")
-        self.assertEqual((ctx.exception.transient, ctx.exception.category), (True, "invalid_response"))
+        self.assertEqual((request.call_count, ctx.exception.transient, ctx.exception.category), (3, False, "invalid_response"))
         tool_only = {"choices": [{"message": {"content": "", "tool_calls": [
             {"id": "c1", "function": {"name": "find", "arguments": "{}"}}]}}]}
         with patch(SESSION_REQUEST, return_value=http_response(body=tool_only)):

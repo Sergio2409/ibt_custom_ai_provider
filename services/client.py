@@ -21,8 +21,12 @@ MAX_ERROR_LENGTH = 800
 MAX_BODY_BYTES = 32 * 1024 * 1024
 MAX_RETRIES = 2
 MAX_INLINE_BYTES = 20 * 1024 * 1024
+# Attempts at once when the model's answer is unusable: empty (no text, no
+# tool call) or HTTP 500 (e.g. Ollama could not parse the model's tool call).
+MODEL_ANSWER_ATTEMPTS = 3
 JSON_TYPES = {"object": dict, "array": list, "string": str, "integer": int, "number": (int, float), "boolean": bool, "null": type(None)}
-RETRY_STATUSES = {429, 502, 503, 504}
+# 500 included: e.g. Ollama failing to parse a tool call the model wrote.
+RETRY_STATUSES = {429, 500, 502, 503, 504}
 # The provider refused these without working on them: resending a completion
 # cannot produce a second answer.
 REJECTED_STATUSES = {429, 503}
@@ -315,15 +319,27 @@ class ProviderClient:
         if not self.config.get("chat_model"):
             raise ProviderError(_("No chat model is configured for this company."))
         self._check_capabilities(messages, tools)
-        if self.config["transport"] == "anthropic":
-            result = self._anthropic_completion(messages, instructions, tools, options)
+        complete = self._anthropic_completion if self.config["transport"] == "anthropic" else self._openai_completion
+        # An empty answer (e.g. a model that spent it on reasoning, or a tool
+        # call Ollama could not parse) would be posted as an empty message.
+        # It is a model failure, not an outage: ask again at once, then stop.
+        for attempt in range(MODEL_ANSWER_ATTEMPTS):
+            try:
+                result = complete(messages, instructions, tools, options)
+            except ProviderError as error:
+                if error.status_code != 500 or attempt == MODEL_ANSWER_ATTEMPTS - 1:
+                    raise
+                _logger.info("AI model %s answer was unreadable (HTTP 500); asking again", self.config["chat_model"])
+                continue
+            content = result["result"]["content"]
+            if any(part.get("type") == "tool_call" or (part.get("text") or "").strip() for part in content):
+                break
+            _logger.info("AI model %s returned an empty answer; asking again", self.config["chat_model"])
         else:
-            result = self._openai_completion(messages, instructions, tools, options)
-        content = result["result"]["content"]
-        if not any(part.get("type") == "tool_call" or (part.get("text") or "").strip() for part in content):
-            # E.g. a thinking model that spent its answer on reasoning: Odoo
-            # would post an empty message. Asking again usually works.
-            raise _invalid(_transient(ProviderError(_("The AI model returned an empty answer."))))
+            raise _invalid(CapabilityError(_(
+                "The AI model %s returned no answer. Ask an administrator to choose a more capable model.",
+                self.config["chat_model"],
+            )))
         if options.get("schema") and not any(part.get("type") == "tool_call" for part in content):
             text = re.sub(r"^```(?:json)?\s*|\s*```$", "", "".join(part.get("text", "") for part in content).strip())
             try:

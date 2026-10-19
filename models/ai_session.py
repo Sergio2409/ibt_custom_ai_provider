@@ -6,6 +6,7 @@ import uuid
 from datetime import timedelta
 
 from odoo import api, fields, models
+from odoo.sql_db import PG_CONCURRENCY_EXCEPTIONS_TO_RETRY
 from odoo.tools import config
 
 from odoo.addons.base.models.ir_cron import MIN_TIME_PER_JOB
@@ -113,6 +114,11 @@ class AiSession(models.Model):
             try:
                 with self.env.cr.savepoint():
                     session._process_ibt_ai_request(cron_end - DELIVERY_MARGIN)
+            except PG_CONCURRENCY_EXCEPTIONS_TO_RETRY:
+                # E.g. the chat renamed while the user writes in it: the
+                # session stays queued and the next run asks again.
+                _logger.info("Queued AI session %s conflicted with a concurrent update; retried on the next run", session.id)
+                continue
             except Exception:
                 _logger.exception("Unexpected failure while processing queued AI session %s", session.id)
                 try:

@@ -302,6 +302,7 @@ Start with **Test Connection** and the gateway log line for the key; the gateway
 | Call transcript missing, shows *File too large* | Recording above 24 MB | Shorter recordings; the limit is the gateway's upload size |
 | AI answers never arrive | The background action is inactive | **Settings → Technical → Scheduled Actions** → *AI: Process custom provider requests* active |
 | AI answer pending for minutes, then *temporarily unavailable* | The provider was unreachable or kept failing for 10 minutes | **IBT AI Request Log**, filter *Failed*: the category (*Unavailable*, *Throttled*, *Waited too long*) and HTTP status; check the provider with **Test Connection** |
+| *The AI model X returned no answer* | The model answered empty three times in a row (common with `gemma4:12b` in long agent chats: its tool calls are dropped by Ollama) | Choose a model with reliable tool calls, e.g. `gpt-oss:20b`; start a new chat for a new task |
 | *The AI model X cannot handle tools / images / PDF files* | The selected chat model lacks that capability | Choose another chat model in Settings, or tick the capability on the model if the server supports it |
 | *The AI provider returned an answer that does not match the requested structure* | The model ignored the JSON schema an Odoo feature asked for | Use a model with structured output support; retry the action |
 | No speaker button on agent answers | Voice Replies off, or the page still runs old code | Tick Voice Replies (section 8); Ctrl+F5 |
@@ -319,7 +320,7 @@ Start with **Test Connection** and the gateway log line for the key; the gateway
 
 | Date | Version | Change |
 | --- | --- | --- |
-| 2026-10-18 | 20.0.1.6.0 | Speech gateway calls in the request log (transcriptions with audio seconds, voice replies with characters, realtime sessions), gateway prices for cost estimates. Fixes: an empty model answer (e.g. a thinking model that only reasoned) is asked again instead of posted as an empty message; queued requests may run up to the provider timeout again (they were cut at 90 s) |
+| 2026-10-18 | 20.0.1.6.0 | Speech gateway calls in the request log (transcriptions with audio seconds, voice replies with characters, realtime sessions), gateway prices for cost estimates. Fixes: an empty model answer is asked again up to three times at once, then reported with the model's name, instead of posted as an empty message; HTTP 500 and concurrent updates are retried; queued requests may run up to the provider timeout again (they were cut at 90 s) |
 | 2026-10-18 | 20.0.1.5.0 | Request log (90 days, no content), request queue view, provider last success/failure, model prices for cost estimates |
 | 2026-10-17 | 20.0.1.4.0 | Model capability flags (tools, images, PDF) checked before sending; PDF files sent to Anthropic and OpenAI-compatible APIs; structured answers validated |
 | 2026-10-17 | 20.0.1.3.0 | Queued requests retried after transient failures, failed after 10 minutes |
