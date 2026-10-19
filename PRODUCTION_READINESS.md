@@ -94,8 +94,12 @@ message that names the model. PDF files reach Anthropic as documents and
 OpenAI-compatible APIs as file parts instead of a placeholder text. Structured
 answers are parsed (Markdown fences removed) and checked against the requested
 schema with a built-in subset validator (type, enum, anyOf, properties,
-required, additionalProperties, items). Not done: per-transport defaults and
-re-asking the model after an invalid structured answer.
+required, additionalProperties, items). Tools whose schema nests objects in
+lists (Odoo's create and update records) get an example of their arguments in
+their description and in the error returned for a rejected call: local
+models that ignore nested schemas follow it (gpt-oss:20b went from 0/4 to 4/4
+valid create calls). Not done: per-transport defaults and re-asking the model
+after an invalid structured answer.
 
 - Validate tool calls, vision input and structured output against model
   capabilities instead of relying on provider failures.

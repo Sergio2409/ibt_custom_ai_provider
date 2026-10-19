@@ -390,14 +390,14 @@ class ProviderClient:
     def _openai_completion(self, messages, instructions, tools, options):
         payload = {
             "model": self.config["chat_model"],
-            "messages": _to_openai_messages(messages, instructions),
+            "messages": _to_openai_messages(messages, instructions, examples := _tool_examples(tools)),
         }
         if tools:
             payload["tools"] = [{
                 "type": "function",
                 "function": {
                     "name": tool["name"],
-                    "description": tool.get("instructions", ""),
+                    "description": _with_example(tool, examples),
                     "parameters": tool.get("schema") or {"type": "object", "properties": {}},
                 },
             } for tool in tools]
@@ -430,14 +430,14 @@ class ProviderClient:
         payload = {
             "model": self.config["chat_model"],
             "max_tokens": options.get("max_tokens") or 4096,
-            "messages": _to_anthropic_messages(messages),
+            "messages": _to_anthropic_messages(messages, examples := _tool_examples(tools)),
         }
         if instructions:
             payload["system"] = instructions
         if tools:
             payload["tools"] = [{
                 "name": tool["name"],
-                "description": tool.get("instructions", ""),
+                "description": _with_example(tool, examples),
                 "input_schema": tool.get("schema") or {"type": "object", "properties": {}},
             } for tool in tools]
         if options.get("schema"):
@@ -464,7 +464,48 @@ def _inline_openai(part):
     return {"type": "file", "file": {"filename": "document.pdf", "file_data": data}}
 
 
-def _to_openai_messages(messages, instructions):
+def _tool_examples(tools):
+    """Example arguments for tools whose schema nests objects in lists (e.g.
+    Odoo's create and update records). Local models that ignore such nested
+    schemas follow a concrete example: {tool name: JSON example}."""
+    return {tool["name"]: json.dumps(_skeleton(tool["schema"]), ensure_ascii=False)
+            for tool in tools or () if _nests_objects(tool.get("schema"))}
+
+
+def _skeleton(schema):
+    if "anyOf" in schema:
+        return "<" + " | ".join(option.get("type", "value") for option in schema["anyOf"]) + ">"
+    if schema.get("type") == "object":
+        return {name: _skeleton(sub) for name, sub in (schema.get("properties") or {}).items()}
+    if schema.get("type") == "array":
+        return [_skeleton(schema.get("items") or {})]
+    return f"<{schema.get('type', 'value')}>"
+
+
+def _nests_objects(schema, in_list=False):
+    if not isinstance(schema, dict):
+        return False
+    if in_list and schema.get("type") == "object":
+        return True
+    return (any(_nests_objects(sub) for sub in (schema.get("properties") or {}).values())
+            or _nests_objects(schema.get("items"), in_list=True))
+
+
+def _with_example(tool, examples):
+    description = tool.get("instructions", "")
+    if tool["name"] in examples:
+        description += f"\n\nExample arguments (follow this structure exactly): {examples[tool['name']]}"
+    return description
+
+
+def _rejected(part, text, examples):
+    """A rejected call's error, plus the expected structure: Odoo's message
+    names only the first problem."""
+    example = examples.get(part.get("tool_name")) if not part.get("success", True) else None
+    return f"{text}\nExpected arguments: {example}" if example else text
+
+
+def _to_openai_messages(messages, instructions, examples=None):
     result = [{"role": "system", "content": instructions}] if instructions else []
     for message in messages:
         if message["role"] == "assistant":
@@ -486,7 +527,8 @@ def _to_openai_messages(messages, instructions):
         for part in message.get("content", []):
             if part.get("type") == "tool_result":
                 value = "\n".join(p.get("text", "") for p in part.get("result", []) if p.get("type") == "text")
-                result.append({"role": "tool", "tool_call_id": str(part["tool_call_id"]), "content": value or "OK"})
+                result.append({"role": "tool", "tool_call_id": str(part["tool_call_id"]),
+                               "content": _rejected(part, value or "OK", examples or {})})
             elif part.get("type") == "text":
                 user_content.append({"type": "text", "text": part.get("text", "")})
             elif part.get("type") == "inline_data":
@@ -496,7 +538,7 @@ def _to_openai_messages(messages, instructions):
     return result
 
 
-def _to_anthropic_messages(messages):
+def _to_anthropic_messages(messages, examples=None):
     result = []
     for message in messages:
         content = []
@@ -508,6 +550,8 @@ def _to_anthropic_messages(messages):
                 content.append({"type": "tool_use", "id": str(part["call_id"]), "name": part["name"], "input": part.get("args") or {}})
             elif kind == "tool_result":
                 blocks = [{"type": "text", "text": p.get("text", "")} for p in part.get("result", []) if p.get("type") == "text"]
+                if hint := _rejected(part, "", examples or {}).strip():
+                    blocks.append({"type": "text", "text": hint})
                 content.append({"type": "tool_result", "tool_use_id": str(part["tool_call_id"]), "content": blocks or "OK", "is_error": not part.get("success", True)})
             elif kind == "inline_data":
                 block = "image" if part["mimetype"].startswith("image/") else "document"

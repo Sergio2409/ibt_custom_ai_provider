@@ -288,3 +288,49 @@ class TestModelCapabilities(TransactionCase):
                 else:
                     with self.assertRaisesRegex(ProviderError, "requested structure"):
                         self._client().completions([], "", schema=schema)
+
+
+class TestToolExamples(TransactionCase):
+
+    CREATE = {"name": "create_records", "instructions": "Create records.", "schema": {
+        "type": "object", "required": ["model_name", "values"],
+        "properties": {
+            "model_name": {"type": "string"},
+            "values": {"type": "array", "items": {"type": "object", "required": ["field_values"], "properties": {
+                "field_values": {"type": "array", "items": {"type": "object", "required": ["field"], "properties": {
+                    "field": {"type": "string"},
+                    "value": {"anyOf": [{"type": "string"}, {"type": "number"}]},
+                }}},
+            }}},
+        },
+    }}
+    SEARCH = {"name": "search", "instructions": "Search.", "schema": {
+        "type": "object", "properties": {"fields": {"type": "array", "items": {"type": "string"}}}}}
+    EXAMPLE = '{"model_name": "<string>", "values": [{"field_values": [{"field": "<string>", "value": "<string | number>"}]}]}'
+
+    def test_nested_tools_get_an_example(self):
+        examples = client_module._tool_examples([self.CREATE, self.SEARCH])
+        self.assertEqual(examples, {"create_records": self.EXAMPLE})
+        self.assertTrue(client_module._with_example(self.CREATE, examples).endswith(self.EXAMPLE))
+        self.assertEqual(client_module._with_example(self.SEARCH, examples), "Search.")
+
+    def test_rejected_call_gets_the_expected_structure(self):
+        examples = {"create_records": self.EXAMPLE}
+        failed = {"type": "tool_result", "tool_name": "create_records", "tool_call_id": "c1", "success": False,
+                  "result": [{"type": "text", "text": "Error: provide info about 'field_values'"}]}
+        succeeded = dict(failed, success=True, result=[{"type": "text", "text": "done"}])
+        openai = _to_openai_messages([{"role": "user", "content": [failed, succeeded]}], "", examples)
+        self.assertEqual(openai[0]["content"], f"Error: provide info about 'field_values'\nExpected arguments: {self.EXAMPLE}")
+        self.assertEqual(openai[1]["content"], "done")
+        anthropic = _to_anthropic_messages([{"role": "user", "content": [failed]}], examples)
+        self.assertEqual(anthropic[0]["content"][0]["content"][-1]["text"], f"Expected arguments: {self.EXAMPLE}")
+
+    def test_request_carries_the_example(self):
+        answer = {"choices": [{"message": {"content": "ok"}}]}
+        client = ProviderClient({"transport": "openai", "base_url": "http://127.0.0.1:9/v1",
+                                 "allow_private_network": True, "chat_model": "m"})
+        with patch(SESSION_REQUEST, return_value=http_response(body=answer)) as request:
+            client.completions([], "", [self.CREATE, self.SEARCH])
+        tools = {t["function"]["name"]: t["function"]["description"] for t in request.call_args.kwargs["json"]["tools"]}
+        self.assertIn(self.EXAMPLE, tools["create_records"])
+        self.assertEqual(tools["search"], "Search.")
